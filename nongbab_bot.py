@@ -7,6 +7,7 @@
   python nongbab_bot.py                 메일함 확인 후 새 식단표 반영 (GitHub Actions가 이걸 실행)
   python nongbab_bot.py --pdf 식단.pdf   메일 없이 로컬 PDF 하나로 테스트
   python nongbab_bot.py --reprocess     이미 처리한 메일도 다시 읽기 (파싱 방식 바꿨을 때)
+  python nongbab_bot.py --dump          원본 PDF만 originals/mail/ 에 내려받기 (읽은 메뉴와 대조할 때)
 """
 import argparse
 import base64
@@ -283,8 +284,11 @@ def _save(path, data):
     tmp.replace(path)  # 앱이 반쯤 쓰인 파일을 읽지 않도록 한 번에 교체
 
 
-def save_week(week):
+def save_week(week, pdf_bytes=None):
     _save(config.WEEKS_DIR / f"{week['week_start']}.json", week)
+    if pdf_bytes:  # 읽은 결과와 언제든 대조할 수 있게 원본도 같은 이름으로 보관
+        config.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+        (config.ORIGINALS_DIR / f"{week['week_start']}.pdf").write_bytes(pdf_bytes)
     rebuild_index()
     print(f"  ✓ {week['week_start']} ~ {week['week_end']} 저장")
 
@@ -318,11 +322,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf", help="메일 대신 로컬 PDF 파일로 테스트")
     ap.add_argument("--reprocess", action="store_true", help="이미 처리한 메일도 다시 해석")
+    ap.add_argument("--dump", nargs="?", const=str(config.ORIGINALS_DIR / "mail"), metavar="DIR",
+                    help="해석하지 않고 검색된 메일의 원본 PDF만 저장 (기본: originals/mail/)")
     args = ap.parse_args()
+
+    if args.dump:
+        out = os.path.abspath(args.dump)
+        os.makedirs(out, exist_ok=True)
+        mails, matched = fetch_menu_mails(set(), reprocess=True)
+        n = 0
+        for m in mails:
+            for filename, data in m["pdfs"]:
+                n += 1
+                safe = re.sub(r"[^0-9A-Za-z가-힣._-]", "_", filename)
+                with open(os.path.join(out, f"{m['received'][:10]}_{n:02d}_{safe}"), "wb") as f:
+                    f.write(data)
+        report("notice", f"원본 PDF {n}개 저장 (검색된 메일 {matched}통)")
+        return
 
     if args.pdf:
         with open(args.pdf, "rb") as f:
-            save_week(parse_pdf(f.read(), {"filename": os.path.basename(args.pdf)}))
+            data = f.read()
+            save_week(parse_pdf(data, {"filename": os.path.basename(args.pdf)}), data)
         return
 
     state = _load(config.PROCESSED_FILE, {"ids": []})
@@ -338,7 +359,7 @@ def main():
             print("  - PDF 첨부 없음, 건너뜀")
         for filename, data in m["pdfs"]:
             try:
-                save_week(parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename}))
+                save_week(parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename}), data)
             except Exception as e:  # 한 파일 실패가 다른 주차 반영을 막지 않게
                 failed += 1
                 if isinstance(e, Fatal):

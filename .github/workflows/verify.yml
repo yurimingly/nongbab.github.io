@@ -1,0 +1,34 @@
+name: 농밥 원본 PDF 받기
+
+# 메일함에서 검색된 식단표 원본 PDF를 originals/mail/ 에 그대로 저장합니다.
+# 앱이 읽은 메뉴(docs/data/weeks)와 원본을 대조할 때 사용합니다.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 원본 PDF 내려받기
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python nongbab_bot.py --dump
+
+      - name: 저장
+        run: |
+          git config user.name "nongbab-bot"
+          git config user.email "nongbab-bot@users.noreply.github.com"
+          git add originals
+          git diff --cached --quiet || git commit -m "원본 식단표 PDF 저장 $(TZ=Asia/Seoul date '+%m/%d %H:%M')"
+          git push

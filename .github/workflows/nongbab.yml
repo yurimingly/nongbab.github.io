@@ -39,6 +39,6 @@ jobs:
         run: |
           git config user.name "nongbab-bot"
           git config user.email "nongbab-bot@users.noreply.github.com"
-          git add docs/data state
+          git add docs/data state originals
           git diff --cached --quiet || git commit -m "식단표 갱신 $(TZ=Asia/Seoul date '+%m/%d %H:%M')"
           git push
