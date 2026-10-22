@@ -5,7 +5,7 @@ name: 농밥 테스트 APK
 on:
   push:
     branches: [main]
-    paths: ["docs/index.html", "docs/manifest.webmanifest", "docs/icon-*.png", "android/**", ".github/workflows/apk.yml"]
+    paths: ["docs/**", "android/**", ".github/workflows/apk.yml"]
   workflow_dispatch: {}
 
 permissions:

@@ -15,9 +15,10 @@ IMAP_HOST = "imap.gmail.com"
 MAX_MAILS_PER_RUN = 10          # 한 번 실행에 확인할 최근 메일 수
 
 # ── PDF 해석 ──────────────────────────────────────────────
-CLAUDE_MODEL = "claude-sonnet-5-5"
-CLAUDE_MAX_TOKENS = 8000
+CLAUDE_MODEL = "claude-opus-5-5"   # 주 1회라 비용보다 정확도 우선
+CLAUDE_MAX_TOKENS = 16000
 PARSE_RETRIES = 2               # JSON 형식이 틀리면 다시 시도할 횟수
+RENDER_DPI = 200                # 작은 글씨 확인용으로 함께 보내는 확대 이미지 해상도
 
 # ── 저장 위치 (GitHub Pages가 docs/ 를 그대로 서비스) ─────────────
 ROOT = Path(__file__).resolve().parent

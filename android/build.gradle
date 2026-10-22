@@ -14,6 +14,9 @@ android {
         // Actions 실행 번호를 버전으로 써서, 새 APK가 항상 이전 것 위에 덮어 설치되게
         versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
         versionName "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        // 온라인 화면 주소 (…/data/ 의 한 단계 위). 비어 있으면 앱 속 화면만 사용
+        def webUrl = (System.getenv("NONGBAB_DATA_URL") ?: "").replaceAll(/data\/?$/, "")
+        resValue "string", "web_url", webUrl
     }
 
     // 테스트용 고정 서명키 → 새 APK를 지우지 않고 덮어 설치 가능 (스토어 출시용 키는 따로)

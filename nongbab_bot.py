@@ -43,13 +43,11 @@ def report(level, msg):
 class Fatal(Exception):
     """설정·로그인처럼 더 진행할 수 없는 문제"""
 
-PROMPT = """첨부한 PDF는 회사 구내식당의 주간 식단표입니다. 표 전체를 빠짐없이 아래 JSON 형식으로 옮겨 주세요.
-JSON만 출력하고 설명은 붙이지 마세요.
+PROMPT = """첨부한 PDF(와 같은 페이지를 확대한 이미지)는 회사 구내식당의 주간 식단표입니다.
+표 전체를 빠짐없이 아래 JSON 형식으로 옮겨 주세요. JSON만 출력하고 설명은 붙이지 마세요.
 
 {
   "title": "표 제목 그대로",
-  "week_start": "YYYY-MM-DD (표의 첫 날짜)",
-  "week_end": "YYYY-MM-DD (표의 마지막 날짜)",
   "days": [
     {
       "date": "YYYY-MM-DD",
@@ -57,11 +55,11 @@ JSON만 출력하고 설명은 붙이지 마세요.
       "holiday_name": "",
       "meals": [
         {
-          "meal": "아침 | 점심 | 저녁 중 하나 (표의 구분 이름이 '활기찬 아침'처럼 꾸며져 있어도 끼니 이름으로)",
-          "label": "표에 적힌 구분 이름 그대로 (예: 활기찬 아침), 없으면 빈 문자열",
-          "time": "운영 시간 (예: 7:30~8:40), 없으면 빈 문자열",
+          "meal": "아침 | 점심 | 저녁 중 하나",
+          "label": "표 왼쪽 끝에 적힌 구분 이름 그대로 (예: 활기찬 아침, 건강한 점심)",
+          "time": "운영 시간 (예: 7:30~8:40)",
           "corners": [
-            {"name": "코너 이름 (예: CORNER1, 컵밥, PLUS, 국)", "items": ["메뉴 한 줄씩"], "kcal": 759}
+            {"name": "코너 이름", "main": "대표 메뉴 (원산지)", "items": ["반찬 한 줄씩"], "kcal": 788}
           ]
         }
       ]
@@ -72,13 +70,17 @@ JSON만 출력하고 설명은 붙이지 마세요.
   ]
 }
 
-규칙:
-- 표에 있는 날짜는 모두 days에 넣으세요. 비어 있거나 회색으로 막힌 날은 holiday=true, meals=[] 로 두고, 사유가 적혀 있으면 holiday_name에 쓰세요.
-- 원산지 표기는 해당 메뉴 줄 끝에 괄호로 붙이세요. 예: "돈육고추장찌개 (돈전지:미국산)"
-- 칼로리 칸은 바로 위 코너의 kcal 숫자로 넣고, 없으면 null.
-- 국/찌개처럼 코너 이름 없이 맨 위에 따로 있는 칸은 corners 맨 앞에 name "국"으로 넣으세요.
-- 그 밖의 코너는 표 왼쪽 칸에 적힌 이름을 그대로 쓰고(예: CORNER1 한식), 이름 칸이 비어 있으면 "기본"으로 쓰세요.
-- 글자를 지어내지 말고, 흐려서 읽을 수 없는 글자는 그대로 [?]로 표시하세요.
+표 읽는 법:
+- 한 끼니 안에 코너(메뉴 선택지)가 여러 개 있습니다. 표 왼쪽 두 번째 칸이 코너 이름입니다 (예: CORNER1, 컵밥, PLUS, CORNER1 인터, 셀비 PLUS, 후식음료, TO샐러드(예약)).
+- 코너마다 색칠된 칸(노란색·회색 등)이 맨 위에 있으면 그것이 그 코너의 대표 메뉴(main)이고, 그 아래 흰 칸의 메뉴들이 items입니다.
+  대표 메뉴는 국·찌개만이 아니라 볶음·덮밥·우동 등 무엇이든 될 수 있습니다. 대표 메뉴를 items에 다시 넣지 마세요.
+- 색칠된 대표 칸 없이 한 칸만 있는 코너(예: 컵밥 "돈가스컵밥 + 국", PLUS "구수한 숭늉", 후식음료 "녹차")는 그 칸 내용을 main에 넣고 items는 [].
+- 코너 이름 칸이 비어 있는데 메뉴가 있으면 name은 빈 문자열 ""로 두세요. 이름을 지어내지 마세요.
+- 칼로리는 그 코너 바로 아래 Kcal 칸의 숫자, 없으면 null.
+- 원산지 괄호는 해당 메뉴 뒤에 그대로 붙이세요. 예: "모둠커틀렛&밥 (치킨가스-계육:국산/멘치가스-돈육:국산)"
+- 한 칸 안에서 줄이 바뀌었어도 괄호가 이어지는 한 메뉴는 한 줄로 합치세요.
+- 표에 있는 날짜는 모두 days에 넣으세요. 빈 칸이나 회색으로 막힌 날은 holiday=true, meals=[], 사유가 있으면 holiday_name.
+- 메뉴 이름은 확대 이미지에서 한 글자씩 확인해서 정확히 옮기세요 (예: '칩'과 '침', '진'과 '전'을 구분). 읽을 수 없는 글자는 [?].
 """
 
 
@@ -146,22 +148,46 @@ def fetch_menu_mails(processed_ids, reprocess=False):
 
 
 # ─────────────────────────── PDF → JSON ───────────────────────────
+def page_images(pdf_bytes):
+    """작은 글씨를 정확히 읽도록 PDF 첫 페이지를 고해상도로 그려 위·아래 두 장으로 나눕니다.
+    pdftoppm(poppler)이 없으면 빈 목록 → PDF만으로 읽습니다."""
+    import shutil, subprocess, tempfile
+    if not shutil.which("pdftoppm"):
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "m.pdf")
+        open(src, "wb").write(pdf_bytes)
+        subprocess.run(["pdftoppm", "-r", str(config.RENDER_DPI), "-png", "-f", "1", "-l", "1", src,
+                        os.path.join(tmp, "p")], check=True, capture_output=True)
+        png = next(f for f in sorted(os.listdir(tmp)) if f.endswith(".png"))
+        try:
+            from PIL import Image
+        except ImportError:
+            return [open(os.path.join(tmp, png), "rb").read()]
+        im = Image.open(os.path.join(tmp, png)).convert("RGB")
+        w, h = im.size
+        overlap = h // 30  # 경계에 걸친 줄이 잘리지 않게 겹쳐 자름
+        out = []
+        for box in [(0, 0, w, h // 2 + overlap), (0, h // 2 - overlap, w, h)]:
+            path = os.path.join(tmp, f"part{len(out)}.png")
+            im.crop(box).save(path, optimize=True)
+            out.append(open(path, "rb").read())
+        return out
+
+
 def ask_claude(pdf_bytes):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise Fatal("ANTHROPIC_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
-    body = {
-        "model": config.CLAUDE_MODEL,
-        "max_tokens": config.CLAUDE_MAX_TOKENS,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
-                                                 "data": base64.b64encode(pdf_bytes).decode()}},
-                {"type": "text", "text": PROMPT},
-            ],
-        }],
-    }
+    content = [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                               "data": base64.b64encode(pdf_bytes).decode()}}]
+    for i, img in enumerate(page_images(pdf_bytes)):
+        content.append({"type": "text", "text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                    "data": base64.b64encode(img).decode()}})
+    content.append({"type": "text", "text": PROMPT})
+    body = {"model": config.CLAUDE_MODEL, "max_tokens": config.CLAUDE_MAX_TOKENS,
+            "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
         data=json.dumps(body).encode(),
@@ -231,8 +257,14 @@ def normalize(raw, source):
             corners = []
             for c in m.get("corners") or []:
                 items = _lines(c.get("items"))
-                if items:
-                    corners.append({"name": str(c.get("name") or "").strip() or ("국" if not corners else "기본"), "items": items, "kcal": _kcal(c.get("kcal"))})
+                main = " ".join(_lines([c.get("main") or ""]))
+                if not main and items:          # 대표 칸이 따로 없던 코너
+                    main, items = items[0], items[1:]
+                if items and items[0] == main:  # 대표 메뉴를 반찬에 또 넣은 경우
+                    items = items[1:]
+                if main:
+                    corners.append({"name": str(c.get("name") or "").strip(), "main": main,
+                                    "items": items, "kcal": _kcal(c.get("kcal"))})
             if corners:
                 meals.append({"meal": _meal_name(m.get("meal"), m.get("label")),
                               "label": str(m.get("label") or "").strip(),

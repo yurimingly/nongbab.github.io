@@ -4,7 +4,12 @@ on:
   schedule:
     # 매주 금요일 저녁 7시 13분(한국 시간)에 한 번 메일함 확인  (cron은 UTC 기준 → 금 10:13)
     - cron: "13 10 * * 5"
-  workflow_dispatch: {}          # Actions 탭에서 '지금 실행' 버튼
+  workflow_dispatch:             # Actions 탭에서 '지금 실행' 버튼
+    inputs:
+      reprocess:
+        description: "이미 반영한 메일도 전부 다시 읽기 (읽는 방식을 바꿨을 때)"
+        type: boolean
+        default: false
   push:                          # 봇 코드·설정을 고치면 바로 한 번 돌려서 확인
     branches: [main]
     paths: ["nongbab_bot.py", "config.py", ".github/workflows/nongbab.yml"]
@@ -27,12 +32,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 확대 이미지 도구 설치
+        run: |
+          sudo apt-get install -y -qq poppler-utils >/dev/null
+          pip install -q pillow
+
       - name: 메일 확인 → 식단 반영
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python nongbab_bot.py
+        run: python nongbab_bot.py ${{ inputs.reprocess && '--reprocess' || '' }}
 
       - name: 바뀐 게 있으면 저장
         if: always()             # 일부 실패해도 성공한 주차는 저장
