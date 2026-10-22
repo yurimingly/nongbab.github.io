@@ -349,6 +349,12 @@ def rebuild_index():
     tmp.replace(config.BUNDLE_FILE)
 
 
+def write_status(result, message):
+    """앱의 '마지막 확인' 표시와 새로고침 버튼이 실행 완료를 알아채는 데 쓰는 파일 (매 실행마다 갱신)."""
+    _save(config.STATUS_FILE, {"checked_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds"),
+                               "result": result, "message": message})
+
+
 # ─────────────────────────── 실행 ───────────────────────────
 def main():
     ap = argparse.ArgumentParser()
@@ -382,16 +388,20 @@ def main():
     mails, matched = fetch_menu_mails(set(state["ids"]), args.reprocess)
     if not mails:
         report("notice", f"새 식단표 메일 없음 — 검색된 메일 {matched}통은 모두 반영됨 (검색어: {config.GMAIL_QUERY})")
+        write_status("none", "새 식단표 없음")
         return
 
     failed = 0
+    saved_weeks = []
     for m in mails:
         print(f"● {m['received'][:16]}  {m['subject']}")
         if not m["pdfs"]:
             print("  - PDF 첨부 없음, 건너뜀")
         for filename, data in m["pdfs"]:
             try:
-                save_week(parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename}), data)
+                week = parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename})
+                save_week(week, data)
+                saved_weeks.append(week)
             except Exception as e:  # 한 파일 실패가 다른 주차 반영을 막지 않게
                 failed += 1
                 if isinstance(e, Fatal):
@@ -403,6 +413,16 @@ def main():
                 state["ids"].append(m["id"])  # 성공한 메일만 '처리됨' → 실패한 건 다음 실행에 재시도
     state["ids"] = state["ids"][-200:]
     _save(config.PROCESSED_FILE, state)
+    if saved_weeks:
+        latest = max(saved_weeks, key=lambda w: w["week_start"])
+        msg = f"{latest['week_start'][5:].replace('-', '/')}주 식단 반영"
+        if len(saved_weeks) > 1:
+            msg += f" 외 {len(saved_weeks) - 1}주"
+    else:
+        msg = "새 식단표 없음"
+    if failed:
+        msg += f" · {failed}건 읽기 실패"
+    write_status("error" if failed and not saved_weeks else "new" if saved_weeks else "none", msg)
     if failed:
         sys.exit(1)
     report("notice", f"식단표 메일 {len(mails)}통 처리 완료")  # Actions에서 빨간 표시로 실패를 알 수 있게
@@ -413,7 +433,9 @@ if __name__ == "__main__":
         main()
     except Fatal as e:
         report("error", str(e))
+        write_status("error", "확인 실패 — 설정을 확인해 주세요")
         sys.exit(1)
     except Exception as e:  # 예상 못 한 오류도 원인이 화면에 남게
         report("error", f"예상 못 한 오류: {type(e).__name__}: {e}")
+        write_status("error", "확인 중 오류가 났어요")
         raise

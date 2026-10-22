@@ -44,6 +44,8 @@ jobs:
           echo "앱이 읽을 식단 주소: $URL (못 읽으면 앱에 든 데이터 사용)"
 
       - name: APK 빌드
+        env:
+          NONGBAB_REFRESH_TOKEN: ${{ secrets.NONGBAB_REFRESH_TOKEN }}
         run: gradle -p android assembleDebug --no-daemon
 
       - name: 파일 이름 정리

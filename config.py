@@ -26,6 +26,7 @@ WEB_DIR = ROOT / "docs"
 DATA_DIR = WEB_DIR / "data"
 WEEKS_DIR = DATA_DIR / "weeks"
 INDEX_FILE = DATA_DIR / "index.json"          # 주차 목록 + 최신 주차
+STATUS_FILE = DATA_DIR / "status.json"        # 마지막 실행 시각·결과 (앱의 새로고침 버튼이 사용)
 BUNDLE_FILE = DATA_DIR / "bundle.js"          # 위 데이터를 한 파일로 묶은 오프라인·앱 내장용 사본
 ORIGINALS_DIR = ROOT / "originals"           # 원본 식단표 PDF (주 월요일 날짜로 저장, 대조용)
 PROCESSED_FILE = ROOT / "state" / "processed.json"  # 이미 처리한 메일 Message-ID

@@ -8,7 +8,7 @@ Gmail ──(금요일 저녁)──▶ GitHub Actions: nongbab_bot.py ──▶
 ```
 
 서버를 따로 빌리지 않습니다. 메일 확인은 GitHub Actions(무료), 앱 화면은 GitHub Pages(무료)가 맡습니다.
-매주 금요일 저녁 7시쯤 메일함을 확인해 다음 주 식단을 반영하고, 앱 자체를 다시 올릴 필요는 없습니다.
+매주 금요일 오후 8시에 메일함을 확인해 다음 주 식단을 반영하고, 앱 자체를 다시 올릴 필요는 없습니다.
 
 | 파일 | 하는 일 |
 |---|---|
@@ -17,7 +17,7 @@ Gmail ──(금요일 저녁)──▶ GitHub Actions: nongbab_bot.py ──▶
 | `docs/index.html` | 앱 화면 (이 한 파일에 화면·디자인·동작이 다 들어 있음) |
 | `docs/sw.js`, `docs/manifest.webmanifest`, 아이콘 | 설치형 앱(PWA)용 파일 |
 | `docs/privacy.html` | 플레이스토어 등록에 필요한 개인정보처리방침 |
-| `.github/workflows/nongbab.yml` | 매주 금요일 저녁 7시쯤 봇 실행 (Actions 탭에서 수동 실행도 가능) |
+| `.github/workflows/nongbab.yml` | 매주 금요일 오후 8시에 봇 실행 (Actions 탭에서 수동 실행도 가능) |
 
 ---
 

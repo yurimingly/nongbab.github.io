@@ -2,8 +2,8 @@ name: 농밥 식단표 수집
 
 on:
   schedule:
-    # 매주 금요일 저녁 7시 13분(한국 시간)에 한 번 메일함 확인  (cron은 UTC 기준 → 금 10:13)
-    - cron: "13 10 * * 5"
+    # 매주 금요일 오후 8시(한국 시간)에 한 번 메일함 확인  (cron은 UTC 기준 → 금 11:00)
+    - cron: "0 11 * * 5"
   workflow_dispatch:             # Actions 탭에서 '지금 실행' 버튼
     inputs:
       reprocess:

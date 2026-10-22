@@ -8,6 +8,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <!-- 안드로이드 앱 빌드 때 GitHub Pages 데이터 주소가 들어감. 비어 있으면 함께 들어 있는 data/ 사용 -->
 <meta name="nongbab-data" content="">
+<meta name="nongbab-repo" content="yurimingly/nongbab.github.io">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -88,6 +89,15 @@ main .wrap{padding-block:14px 32px;display:grid;gap:14px}
 .shared h3 small{font-weight:400;color:var(--muted);font-size:12px}
 .shared div{font-size:14px;color:var(--muted)}
 .foot{font-size:12px;color:var(--muted);text-align:center}
+.refresh{padding-block:0 36px;display:grid;justify-items:center;gap:6px;text-align:center}
+.refresh-btn{display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:999px;background:var(--paddy);color:var(--bg);font-weight:600;font-size:15px}
+.refresh-btn:disabled{opacity:.6;cursor:default}
+.refresh-btn.busy svg{animation:spin 1.1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.refresh-btn.busy svg{animation:none}}
+.refresh-note{margin:0;font-size:13px;color:var(--muted)}
+.refresh-status{margin:0;font-size:12.5px;color:var(--muted);min-height:1.5em;max-width:40ch}
+.refresh-status a{color:var(--paddy)}
 .empty{padding:48px 16px;text-align:center;color:var(--muted)}
 .empty b{display:block;font-family:var(--f-display);font-size:22px;color:var(--ink);font-weight:400;margin-bottom:6px}
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
@@ -110,7 +120,16 @@ main .wrap{padding-block:14px 32px;display:grid;gap:14px}
   </div>
 </header>
 
-<main><div class="wrap" id="app"><div class="empty"><b>식단표 불러오는 중</b>잠시만 기다려 주세요</div></div></main>
+<main><div class="wrap" id="app"><div class="empty"><b>식단표 불러오는 중</b>잠시만 기다려 주세요</div></div>
+  <section class="wrap refresh" aria-label="새 식단 확인">
+    <button class="refresh-btn" id="refresh" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      <span id="refresh-label">지금 새 식단 확인</span>
+    </button>
+    <p class="refresh-note">자동으로 매주 금요일 오후 8시에 돌아갑니다.</p>
+    <p class="refresh-status" id="refresh-status" aria-live="polite"></p>
+  </section>
+</main>
 
 <script src="data/bundle.js"></script>
 <script>
@@ -165,13 +184,17 @@ function mealHTML(meal){
   </section>`;
 }
 
+// 하루 안에서 점심을 먼저 보여줌
+const MEAL_ORDER = {"점심": 0, "아침": 1, "저녁": 2};
+const byMeal = (a, b) => (MEAL_ORDER[a] ?? 9) - (MEAL_ORDER[b] ?? 9);
+
 function render(){
   const w = weeks[index.weeks[cur].start];
   $("#range").textContent = `${md(w.week_start)} – ${md(w.week_end)}`;
   $("#prev").disabled = cur >= index.weeks.length - 1;
   $("#next").disabled = cur <= 0;
 
-  const meals = [...new Set(w.days.flatMap(d => d.meals.map(m => m.meal)))];
+  const meals = [...new Set(w.days.flatMap(d => d.meals.map(m => m.meal)))].sort(byMeal);
   if (!["전체", ...meals].includes(mealFilter)) mealFilter = "전체";
   $("#chips").innerHTML = ["전체", ...meals].map(m => `<button class="chip" aria-pressed="${m === mealFilter}" data-meal="${esc(m)}">${esc(m)}</button>`).join("");
 
@@ -179,7 +202,7 @@ function render(){
   const days = w.days.map(d => {
     const head = `<div class="day-h"><span class="dow">${d.weekday}</span><span class="date">${md(d.date)}</span>`;
     if (d.holiday) return `<article class="day off" id="d-${d.date}">${head}<span class="off-msg">${esc(d.holiday_name || "운영 안 함")}</span></div></article>`;
-    const shown = d.meals.filter(m => mealFilter === "전체" || m.meal === mealFilter);
+    const shown = d.meals.filter(m => mealFilter === "전체" || m.meal === mealFilter).sort((a, b) => byMeal(a.meal, b.meal));
     return `<article class="day${d.date === today ? " today" : ""}" id="d-${d.date}">${head}${d.date === today ? '<span class="tag">오늘</span>' : ""}</div>
       ${shown.length ? shown.map(mealHTML).join("") : '<section class="meal"><span class="meal-time">이 끼니는 메뉴가 없어요</span></section>'}</article>`;
   }).join("");
@@ -214,6 +237,52 @@ async function boot(refresh){
     $("#app").innerHTML = `<div class="empty"><b>식단표를 불러오지 못했어요</b>인터넷 연결을 확인하고 다시 열어 주세요</div>`;
   }
 }
+
+// ── 새 식단 확인: 앱에서는 봇을 바로 실행, 브라우저에서는 GitHub 실행 화면으로 안내 ──
+const REPO = document.querySelector('meta[name="nongbab-repo"]')?.content || "";
+const ACTIONS_URL = REPO ? `https://github.com/${REPO}/actions/workflows/nongbab.yml` : "";
+const bridge = window.NongbabApp && typeof window.NongbabApp.refresh === "function" && window.NongbabApp.canRefresh?.() ? window.NongbabApp : null;
+const fmt = iso => iso ? `${+iso.slice(5,7)}/${+iso.slice(8,10)} ${iso.slice(11,16)}` : "";
+
+async function getStatus(){
+  try { const r = await fetch(base + "status.json?t=" + Date.now(), {cache:"no-store"}); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+function showStatus(st){
+  const el = $("#refresh-status");
+  if (!st) { el.textContent = ""; return; }
+  el.textContent = `마지막 확인 ${fmt(st.checked_at)} · ${st.message}`;
+}
+getStatus().then(showStatus);
+
+function setBusy(on, label){
+  $("#refresh").disabled = on; $("#refresh").classList.toggle("busy", on);
+  $("#refresh-label").textContent = label || "지금 새 식단 확인";
+}
+
+$("#refresh").onclick = async () => {
+  if (!bridge) {
+    $("#refresh-status").innerHTML = ACTIONS_URL
+      ? `앱에서만 바로 실행돼요. 여기서는 <a href="${ACTIONS_URL}" target="_blank" rel="noopener">GitHub 실행 화면</a>에서 Run workflow를 누르세요.`
+      : "앱에서만 바로 실행돼요.";
+    return;
+  }
+  const before = (await getStatus())?.checked_at || "";
+  let res; try { res = JSON.parse(bridge.refresh()); } catch (e) { res = {ok:false, message:String(e)}; }
+  if (!res.ok) { $("#refresh-status").textContent = res.message || "실행하지 못했어요."; return; }
+  setBusy(true, "메일 확인 중…");
+  $("#refresh-status").textContent = "메일함을 확인하고 있어요. 보통 1~3분 걸려요.";
+  const started = Date.now();
+  while (Date.now() - started < 6 * 60e3) {           // 최대 6분 기다림
+    await new Promise(r => setTimeout(r, 15e3));
+    const st = await getStatus();
+    if (st && st.checked_at && st.checked_at !== before) {
+      setBusy(false); showStatus(st); weeks = {}; await boot(true); return;
+    }
+  }
+  setBusy(false);
+  $("#refresh-status").textContent = "아직 결과가 안 왔어요. 잠시 후 앱을 다시 열어 보세요.";
+};
 
 $("#prev").onclick = () => loadWeek(cur + 1);
 $("#next").onclick = () => loadWeek(cur - 1);
