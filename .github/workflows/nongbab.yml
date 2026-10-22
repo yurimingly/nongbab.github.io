@@ -33,8 +33,9 @@ jobs:
           python-version: "3.12"
 
       - name: 확대 이미지 도구 설치
+        continue-on-error: true   # 설치가 안 되면 PDF만으로 읽음 (정확도만 조금 낮아짐)
         run: |
-          sudo apt-get install -y -qq poppler-utils >/dev/null
+          which pdftoppm || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
           pip install -q pillow
 
       - name: 메일 확인 → 식단 반영
