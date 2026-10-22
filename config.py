@@ -1,0 +1,32 @@
+"""농밥 설정 파일 — 로직(nongbab_bot.py)과 분리된 값만 둡니다.
+
+비밀번호·API 키는 여기 적지 말고 환경변수(GitHub Secrets)로 넣으세요.
+  GMAIL_USER          식단표 메일을 받는 Gmail 주소
+  GMAIL_APP_PASSWORD  Google 계정 > 보안 > 앱 비밀번호 (16자리, 일반 비밀번호 X)
+  ANTHROPIC_API_KEY   PDF 식단표를 읽어 JSON으로 바꿀 때 사용
+"""
+from pathlib import Path
+
+# ── 메일 찾기 ──────────────────────────────────────────────
+# Gmail 검색 문법 그대로 씁니다 (Gmail 검색창에 넣어 결과가 맞는지 먼저 확인해 보세요).
+GMAIL_QUERY = 'from:yeeun63.kin@samsung.com subject:주간식단표 has:attachment filename:pdf newer_than:60d'
+IMAP_HOST = "imap.gmail.com"
+MAX_MAILS_PER_RUN = 10          # 한 번 실행에 확인할 최근 메일 수
+
+# ── PDF 해석 ──────────────────────────────────────────────
+CLAUDE_MODEL = "claude-sonnet-5-5"
+CLAUDE_MAX_TOKENS = 8000
+PARSE_RETRIES = 2               # JSON 형식이 틀리면 다시 시도할 횟수
+
+# ── 저장 위치 (GitHub Pages가 docs/ 를 그대로 서비스) ─────────────
+ROOT = Path(__file__).resolve().parent
+WEB_DIR = ROOT / "docs"
+DATA_DIR = WEB_DIR / "data"
+WEEKS_DIR = DATA_DIR / "weeks"
+INDEX_FILE = DATA_DIR / "index.json"          # 주차 목록 + 최신 주차
+BUNDLE_FILE = DATA_DIR / "bundle.js"          # 위 데이터를 한 파일로 묶은 오프라인·앱 내장용 사본
+PROCESSED_FILE = ROOT / "state" / "processed.json"  # 이미 처리한 메일 Message-ID
+KEEP_WEEKS = 12                 # 앱에서 넘겨볼 수 있는 과거 주차 수
+
+# ── 표시 이름 ────────────────────────────────────────────
+APP_NAME = "농밥"

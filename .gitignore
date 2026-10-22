@@ -1,0 +1,8 @@
+state/*.tmp
+docs/data/**/*.tmp
+__pycache__/
+*.keystore
+android/build/
+android/.gradle/
+android/local.properties
+!android/debug.keystore

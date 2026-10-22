@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>농밥</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6b3a">
+<link rel="manifest" href="manifest.webmanifest">
+<!-- 안드로이드 앱 빌드 때 GitHub Pages 데이터 주소가 들어감. 비어 있으면 함께 들어 있는 data/ 사용 -->
+<meta name="nongbab-data" content="">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: 고정 헤더(주차·끼니 필터) 아래 요일 카드를 세로로 쌓고, 넓은 화면에선 월~금이 한 줄로 펼쳐지는 그리드 */
+:root{
+  --bg:#f3f6f1; --surface:#ffffff; --ink:#18231b; --muted:#5d6b60; --line:#dde5dc;
+  --paddy:#2f6b3a; --paddy-soft:#e3efe3; --barley:#9a6f12; --barley-soft:#f6ecd2; --off:#e9ece8;
+  --f-display:"Do Hyeon","IBM Plex Sans KR",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e1410; --surface:#161f19; --ink:#e7eee8; --muted:#97a69a; --line:#26322a;
+  --paddy:#7cc48a; --paddy-soft:#1d3323; --barley:#e2b94f; --barley-soft:#33290f; --off:#121914; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1410; --surface:#161f19; --ink:#e7eee8; --muted:#97a69a; --line:#26322a;
+  --paddy:#7cc48a; --paddy-soft:#1d3323; --barley:#e2b94f; --barley-soft:#33290f; --off:#121914; color-scheme:dark}
+
+html,body{background:var(--bg)}
+body{color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-tap-highlight-color:transparent}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:1280px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+header .wrap{padding-block:12px 10px;display:grid;gap:10px}
+.top{display:flex;align-items:center;gap:12px}
+.logo{font-family:var(--f-display);font-size:28px;line-height:1;color:var(--paddy);letter-spacing:.02em;display:flex;align-items:center;gap:6px}
+.logo svg{width:26px;height:26px}
+.week{margin-left:auto;display:flex;align-items:center;gap:4px}
+.week span{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;min-width:7.5em;text-align:center}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible{outline:2px solid var(--paddy);outline-offset:2px;border-radius:8px}
+.nav{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
+.nav:hover:not(:disabled){background:var(--paddy-soft);color:var(--paddy)}
+.nav:disabled{opacity:.3;cursor:default}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.chip{padding:6px 14px;border-radius:999px;border:1px solid var(--line);font-size:14px;font-weight:500;white-space:nowrap;color:var(--muted)}
+.chip[aria-pressed="true"]{background:var(--paddy);border-color:var(--paddy);color:var(--bg)}
+
+main .wrap{padding-block:14px 32px;display:grid;gap:14px}
+.note{font-size:13px;color:var(--barley);background:var(--barley-soft);border-radius:10px;padding:8px 12px}
+.days{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));align-items:start}
+
+@media (min-width:1000px){.days{grid-template-columns:repeat(var(--cols,5),minmax(0,1fr))}}
+.day{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;scroll-margin-top:130px}
+.day.today{border-color:var(--paddy);box-shadow:0 0 0 1px var(--paddy)}
+.day-h{display:flex;align-items:baseline;gap:8px;padding:12px 14px 8px}
+.dow{font-family:var(--f-display);font-size:22px;line-height:1}
+.date{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tag{margin-left:auto;font-size:12px;font-weight:600;color:var(--bg);background:var(--paddy);border-radius:6px;padding:2px 8px}
+.day.off{background:var(--off)}
+.day.off .day-h{padding-bottom:12px}
+.off-msg{margin-left:auto;font-size:13px;color:var(--muted)}
+
+.meal{border-top:1px solid var(--line);padding:10px 14px 12px;display:grid;gap:8px}
+.meal-h{display:flex;align-items:baseline;gap:8px}
+.meal-name{font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--paddy)}
+.meal-time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.main-dish{font-size:17px;font-weight:700;line-height:1.35;text-wrap:balance}
+.corner{display:grid;grid-template-columns:4.2em 1fr auto;gap:2px 8px;align-items:baseline}
+.c-name{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.03em;text-transform:uppercase;padding-top:2px}
+.c-items{min-width:0;font-size:14.5px}
+.c-items div+div{margin-top:1px}
+.kcal{font-size:11.5px;font-weight:600;color:var(--barley);background:var(--barley-soft);border-radius:6px;padding:1px 6px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.origin{font-size:12px;color:var(--muted);font-weight:400}
+
+.shared{background:var(--surface);border:1px dashed var(--line);border-radius:14px;padding:12px 14px;display:grid;gap:4px}
+.shared h3{margin:0;font-size:14px;display:flex;gap:8px;align-items:baseline}
+.shared h3 small{font-weight:400;color:var(--muted);font-size:12px}
+.shared div{font-size:14px;color:var(--muted)}
+.foot{font-size:12px;color:var(--muted);text-align:center}
+.empty{padding:48px 16px;text-align:center;color:var(--muted)}
+.empty b{display:block;font-family:var(--f-display);font-size:22px;color:var(--ink);font-weight:400;margin-bottom:6px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<header>
+  <div class="wrap">
+    <div class="top">
+      <div class="logo" aria-label="농밥">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 15h24a12 12 0 0 1-24 0z" fill="currentColor"/><ellipse cx="11" cy="11" rx="2" ry="3.2" fill="currentColor" opacity=".55" transform="rotate(-25 11 11)"/><ellipse cx="16.5" cy="9.5" rx="2" ry="3.2" fill="currentColor" opacity=".55"/><ellipse cx="22" cy="11" rx="2" ry="3.2" fill="currentColor" opacity=".55" transform="rotate(25 22 11)"/></svg>
+        농밥
+      </div>
+      <div class="week">
+        <button class="nav" id="prev" aria-label="지난주"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <span id="range">불러오는 중</span>
+        <button class="nav" id="next" aria-label="다음주"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="끼니"></div>
+  </div>
+</header>
+
+<main><div class="wrap" id="app"><div class="empty"><b>식단표 불러오는 중</b>잠시만 기다려 주세요</div></div></main>
+
+<script src="data/bundle.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const store = {get(k){try{return localStorage.getItem(k)}catch{return null}}, set(k,v){try{localStorage.setItem(k,v)}catch{}}};
+const kst = () => new Date(Date.now() + 9*3600e3).toISOString().slice(0,10); // 한국 기준 오늘
+const md = iso => { const [,m,d] = iso.split("-"); return `${+m}.${+d}`; };
+
+// 식단 데이터 위치: 온라인 주소(있으면) → 앱에 함께 든 data/ 순서로 시도
+const REMOTE = (document.querySelector('meta[name="nongbab-data"]')?.content || "").replace(/\/?$/, "/");
+const SOURCES = REMOTE.length > 1 ? [REMOTE, "data/"] : ["data/"];
+let base = SOURCES[0];
+const getJSON = async url => {
+  try { const r = await fetch(url, {cache:"no-cache"}); if (!r.ok) throw new Error(r.status); return await r.json(); }
+  catch (e) { // 오프라인이거나 앱 안(file://)이면 함께 들어 있는 사본 사용
+    const local = window.NONGBAB_BUNDLE?.[url.startsWith("data/") ? url.slice(5) : ""];
+    if (local) return local; throw e;
+  }
+};
+let index = null, weeks = {}, cur = 0, mealFilter = store.get("nongbab.meal") || "전체";
+
+// 원산지 괄호는 작게, 국/찌개는 대표 메뉴로
+function itemHTML(t){
+  const m = t.match(/^(.*?)\s*(\([^()]*(?:\([^()]*\)[^()]*)*\))\s*$/);
+  return m ? `${esc(m[1])} <span class="origin">${esc(m[2])}</span>` : esc(t);
+}
+const isMain = c => /^(국|찌개|메인|main)$/i.test(c.name);
+
+function mealHTML(meal){
+  const main = meal.corners.filter(isMain), rest = meal.corners.filter(c => !isMain(c));
+  return `<section class="meal">
+    <div class="meal-h"><span class="meal-name">${esc(meal.meal)}</span>${meal.time ? `<span class="meal-time">${esc(meal.time)}</span>` : ""}</div>
+    ${main.map(c => c.items.map(i => `<div class="main-dish">${itemHTML(i)}</div>`).join("")).join("")}
+    ${rest.map(c => `<div class="corner"><span class="c-name">${esc(c.name)}</span>
+      <div class="c-items">${c.items.map(i => `<div>${itemHTML(i)}</div>`).join("")}</div>
+      ${c.kcal ? `<span class="kcal">${c.kcal}kcal</span>` : "<span></span>"}</div>`).join("")}
+  </section>`;
+}
+
+function render(){
+  const w = weeks[index.weeks[cur].start];
+  $("#range").textContent = `${md(w.week_start)} – ${md(w.week_end)}`;
+  $("#prev").disabled = cur >= index.weeks.length - 1;
+  $("#next").disabled = cur <= 0;
+
+  const meals = [...new Set(w.days.flatMap(d => d.meals.map(m => m.meal)))];
+  if (!["전체", ...meals].includes(mealFilter)) mealFilter = "전체";
+  $("#chips").innerHTML = ["전체", ...meals].map(m => `<button class="chip" aria-pressed="${m === mealFilter}" data-meal="${esc(m)}">${esc(m)}</button>`).join("");
+
+  const today = kst();
+  const days = w.days.map(d => {
+    const head = `<div class="day-h"><span class="dow">${d.weekday}</span><span class="date">${md(d.date)}</span>`;
+    if (d.holiday) return `<article class="day off" id="d-${d.date}">${head}<span class="off-msg">${esc(d.holiday_name || "운영 안 함")}</span></div></article>`;
+    const shown = d.meals.filter(m => mealFilter === "전체" || m.meal === mealFilter);
+    return `<article class="day${d.date === today ? " today" : ""}" id="d-${d.date}">${head}${d.date === today ? '<span class="tag">오늘</span>' : ""}</div>
+      ${shown.length ? shown.map(mealHTML).join("") : '<section class="meal"><span class="meal-time">이 끼니는 메뉴가 없어요</span></section>'}</article>`;
+  }).join("");
+  const shared = (w.shared || []).filter(s => mealFilter === "전체" || s.meal === mealFilter);
+
+  $("#app").innerHTML = `
+    ${w.sample ? '<div class="note">예시 화면이에요. 메일 미리보기에서 옮긴 지난 식단이라 점심은 일부만 있어요. 봇이 실행되면 실제 식단표로 바뀝니다.</div>' : ""}
+    <div class="days" style="--cols:${w.days.length}">${days}</div>
+    ${shared.map(s => `<div class="shared"><h3>${esc(s.name)} <small>${esc(s.time)} · 매일</small></h3>${s.lines.map(l => `<div>${esc(l)}</div>`).join("")}</div>`).join("")}
+    <div class="foot">${esc(w.title)}${index.updated ? ` · ${index.updated.slice(5,16).replace("T"," ")} 갱신` : ""}</div>`;
+}
+
+async function loadWeek(i){
+  const meta = index.weeks[i];
+  if (!weeks[meta.start]) weeks[meta.start] = await getJSON(base + meta.file);
+  cur = i; render();
+}
+
+async function boot(refresh){
+  try{
+    index = null;
+    for (const src of SOURCES) { try { index = await getJSON(src + "index.json"); base = src; break; } catch {} }
+    if (!index) throw new Error("no data");
+    if (!index.weeks?.length) throw new Error("empty");
+    const today = kst();
+    const i = refresh ? Math.min(cur, index.weeks.length - 1) : Math.max(0, index.weeks.findIndex(w => w.start <= today && today <= w.end));
+    await loadWeek(i);
+    if (!refresh) document.getElementById("d-" + today)?.scrollIntoView({block:"start"});
+  }catch(e){
+    if (refresh) return; // 새로고침 실패 시 보던 화면 유지
+    $("#range").textContent = "";
+    $("#app").innerHTML = `<div class="empty"><b>식단표를 불러오지 못했어요</b>인터넷 연결을 확인하고 다시 열어 주세요</div>`;
+  }
+}
+
+$("#prev").onclick = () => loadWeek(cur + 1);
+$("#next").onclick = () => loadWeek(cur - 1);
+$("#chips").onclick = e => { const b = e.target.closest(".chip"); if (!b) return; mealFilter = b.dataset.meal; store.set("nongbab.meal", mealFilter); render(); };
+document.addEventListener("visibilitychange", () => { if (!document.hidden && index) { weeks = {}; boot(true); } }); // 앱으로 돌아오면 새 식단 확인
+
+if ("serviceWorker" in navigator && location.hostname !== "appassets.androidplatform.net") { try { navigator.serviceWorker.register("sw.js").catch(() => {}); } catch {} }
+boot();
+</script>

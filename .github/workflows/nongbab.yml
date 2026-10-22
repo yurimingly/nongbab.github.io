@@ -1,0 +1,42 @@
+name: 농밥 식단표 수집
+
+on:
+  schedule:
+    # 평일(한국 시간) 오전 8시~오후 8시, 30분마다 메일함 확인  (cron은 UTC 기준)
+    - cron: "17,47 23 * * 0-4"
+    - cron: "17,47 0-11 * * 1-5"
+  workflow_dispatch: {}          # Actions 탭에서 '지금 실행' 버튼
+
+permissions:
+  contents: write                # 새 식단 JSON을 저장소에 커밋
+
+concurrency:
+  group: nongbab-fetch           # 두 번 겹쳐 돌며 충돌하지 않게
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 메일 확인 → 식단 반영
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python nongbab_bot.py
+
+      - name: 바뀐 게 있으면 저장
+        if: always()             # 일부 실패해도 성공한 주차는 저장
+        run: |
+          git config user.name "nongbab-bot"
+          git config user.email "nongbab-bot@users.noreply.github.com"
+          git add docs/data state
+          git diff --cached --quiet || git commit -m "식단표 갱신 $(TZ=Asia/Seoul date '+%m/%d %H:%M')"
+          git push

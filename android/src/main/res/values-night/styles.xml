@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 폰이 다크 모드면 앱 화면도 다크로 (웹 화면의 다크 색상이 자동 적용됨) -->
+    <style name="Nongbab" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0E1410</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#0E1410</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

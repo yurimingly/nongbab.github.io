@@ -1,0 +1,54 @@
+// 농밥 안드로이드 앱 — docs/ 의 웹앱을 그대로 담아 보여주는 얇은 껍데기
+plugins {
+    id "com.android.application" version "8.5.2"
+}
+
+android {
+    namespace "io.nongbab.app"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "io.nongbab.app"
+        minSdk 24
+        targetSdk 34
+        // Actions 실행 번호를 버전으로 써서, 새 APK가 항상 이전 것 위에 덮어 설치되게
+        versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+        versionName "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+
+    // 테스트용 고정 서명키 → 새 APK를 지우지 않고 덮어 설치 가능 (스토어 출시용 키는 따로)
+    signingConfigs {
+        debug {
+            storeFile file("debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+
+    sourceSets {
+        main {
+            // 앱 화면은 docs/ 폴더를 그대로 씀 → 웹과 앱이 항상 같은 화면
+            assets.srcDirs = ["build/web"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// docs/ 를 앱 안으로 복사하면서, 온라인 식단 주소(NONGBAB_DATA_URL)가 있으면 화면에 넣어줌
+tasks.register("prepareWeb", Copy) {
+    from("../docs") {
+        exclude "sw.js", ".well-known/**", "privacy.html"
+    }
+    into "build/web"
+    def dataUrl = System.getenv("NONGBAB_DATA_URL") ?: ""
+    inputs.property("dataUrl", dataUrl)
+    filesMatching("index.html") {
+        filter { line -> line.replace('<meta name="nongbab-data" content="">', "<meta name=\"nongbab-data\" content=\"${dataUrl}\">") }
+    }
+}
+preBuild.dependsOn "prepareWeb"
