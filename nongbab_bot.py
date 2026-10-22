@@ -141,7 +141,7 @@ def fetch_menu_mails(processed_ids, reprocess=False):
         found.append({"id": msg_id, "subject": subject, "received": received, "pdfs": pdfs})
     conn.logout()
     found.sort(key=lambda m: m["received"])  # 오래된 것부터 → 같은 주 정정본이면 최신이 덮어씀
-    return found
+    return found, len(data[0].split())
 
 
 # ─────────────────────────── PDF → JSON ───────────────────────────
@@ -326,9 +326,9 @@ def main():
         return
 
     state = _load(config.PROCESSED_FILE, {"ids": []})
-    mails = fetch_menu_mails(set(state["ids"]), args.reprocess)
+    mails, matched = fetch_menu_mails(set(state["ids"]), args.reprocess)
     if not mails:
-        report("notice", f"새 식단표 메일 없음 (검색어: {config.GMAIL_QUERY})")
+        report("notice", f"새 식단표 메일 없음 — 검색된 메일 {matched}통은 모두 반영됨 (검색어: {config.GMAIL_QUERY})")
         return
 
     failed = 0

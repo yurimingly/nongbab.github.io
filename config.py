@@ -9,7 +9,8 @@ from pathlib import Path
 
 # ── 메일 찾기 ──────────────────────────────────────────────
 # Gmail 검색 문법 그대로 씁니다 (Gmail 검색창에 넣어 결과가 맞는지 먼저 확인해 보세요).
-GMAIL_QUERY = 'from:yeeun63.kin@samsung.com subject:주간식단표 has:attachment filename:pdf newer_than:60d'
+# 메일 제목 "[주간식단표] KT&G 서대문타워 왕구네식당" 으로 찾습니다 (보내는 사람이 바뀌어도 계속 동작).
+GMAIL_QUERY = 'subject:("주간식단표" "왕구네식당") has:attachment filename:pdf newer_than:60d'
 IMAP_HOST = "imap.gmail.com"
 MAX_MAILS_PER_RUN = 10          # 한 번 실행에 확인할 최근 메일 수
 
