@@ -76,6 +76,7 @@ JSON만 출력하고 설명은 붙이지 마세요.
 - 원산지 표기는 해당 메뉴 줄 끝에 괄호로 붙이세요. 예: "돈육고추장찌개 (돈전지:미국산)"
 - 칼로리 칸은 바로 위 코너의 kcal 숫자로 넣고, 없으면 null.
 - 국/찌개처럼 코너 이름 없이 맨 위에 따로 있는 칸은 corners 맨 앞에 name "국"으로 넣으세요.
+- 그 밖의 코너는 표 왼쪽 칸에 적힌 이름을 그대로 쓰고(예: CORNER1 한식), 이름 칸이 비어 있으면 "기본"으로 쓰세요.
 - 글자를 지어내지 말고, 흐려서 읽을 수 없는 글자는 그대로 [?]로 표시하세요.
 """
 
@@ -200,7 +201,13 @@ def _kcal(v):
 def _lines(v):
     if isinstance(v, str):
         v = v.split("\n")
-    return [re.sub(r"\s+", " ", str(x)).strip() for x in (v or []) if str(x).strip()]
+    out = []
+    for x in v or []:
+        t = re.sub(r"\s+", " ", str(x)).strip()
+        t = re.sub(r"^[*•·\-–]+\s*", "", t)  # 표의 글머리 기호(*, •, -)는 앱이 따로 그리므로 제거
+        if t:
+            out.append(t)
+    return out
 
 
 MEAL_ORDER = {"아침": 0, "점심": 1, "저녁": 2}
@@ -224,7 +231,7 @@ def normalize(raw, source):
             for c in m.get("corners") or []:
                 items = _lines(c.get("items"))
                 if items:
-                    corners.append({"name": str(c.get("name") or "").strip(), "items": items, "kcal": _kcal(c.get("kcal"))})
+                    corners.append({"name": str(c.get("name") or "").strip() or ("국" if not corners else "기본"), "items": items, "kcal": _kcal(c.get("kcal"))})
             if corners:
                 meals.append({"meal": _meal_name(m.get("meal"), m.get("label")),
                               "label": str(m.get("label") or "").strip(),
