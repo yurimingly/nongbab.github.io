@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
@@ -24,6 +25,22 @@ from email.utils import parsedate_to_datetime
 import config
 
 WEEKDAYS = "월화수목금토일"
+IN_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def report(level, msg):
+    """콘솔에 찍고, GitHub Actions에서는 실행 화면 상단 알림 + 요약에도 남깁니다 (로그를 안 열어도 원인이 보이게)."""
+    print(msg)
+    if IN_ACTIONS:
+        print(f"::{level}::" + msg.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as f:
+                f.write(("❌ " if level == "error" else "ℹ️ ") + msg.replace("\n", "  \n") + "\n\n")
+
+
+class Fatal(Exception):
+    """설정·로그인처럼 더 진행할 수 없는 문제"""
 
 PROMPT = """첨부한 PDF는 회사 구내식당의 주간 식단표입니다. 표 전체를 빠짐없이 아래 JSON 형식으로 옮겨 주세요.
 JSON만 출력하고 설명은 붙이지 마세요.
@@ -73,13 +90,13 @@ def fetch_menu_mails(processed_ids, reprocess=False):
     user = os.environ.get("GMAIL_USER")
     pw = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
     if not user or not pw:
-        sys.exit("GMAIL_USER / GMAIL_APP_PASSWORD 환경변수가 없습니다. README의 '1. Gmail 앱 비밀번호'를 보세요.")
+        raise Fatal("GMAIL_USER / GMAIL_APP_PASSWORD 환경변수가 없습니다. README의 '1. Gmail 앱 비밀번호'를 보세요.")
 
     conn = imaplib.IMAP4_SSL(config.IMAP_HOST)
     try:
         conn.login(user, pw)
     except imaplib.IMAP4.error as e:
-        sys.exit(f"Gmail 로그인 실패: {e}\n→ 일반 비밀번호가 아니라 '앱 비밀번호'를 넣었는지 확인하세요.")
+        raise Fatal(f"Gmail 로그인 실패: {e}\n→ 일반 비밀번호가 아니라 '앱 비밀번호'를 넣었는지 확인하세요.")
 
     # 받은편지함 밖(라벨·보관함)에 있어도 찾도록 전체보관함에서 검색.
     # 한국어 Gmail은 폴더 이름이 '[Gmail]/전체보관함'이라, 이름 대신 \All 표시로 찾습니다.
@@ -97,7 +114,7 @@ def fetch_menu_mails(processed_ids, reprocess=False):
     status, data = conn.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
     if status != "OK":
         conn.logout()
-        sys.exit(f"메일 검색 실패: {data}")
+        raise Fatal(f"메일 검색 실패: {data}")
 
     uids = data[0].split()[-config.MAX_MAILS_PER_RUN:]
     found = []
@@ -130,7 +147,7 @@ def fetch_menu_mails(processed_ids, reprocess=False):
 def ask_claude(pdf_bytes):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        sys.exit("ANTHROPIC_API_KEY 환경변수가 없습니다.")
+        raise Fatal("ANTHROPIC_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
     body = {
         "model": config.CLAUDE_MODEL,
         "max_tokens": config.CLAUDE_MAX_TOKENS,
@@ -148,8 +165,16 @@ def ask_claude(pdf_bytes):
         data=json.dumps(body).encode(),
         headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=180) as r:
-        res = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            res = json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="ignore")[:300]
+        if e.code in (401, 403):
+            raise Fatal(f"Claude API 키가 거절됐습니다 ({e.code}). 키를 다시 확인하세요: {detail}")
+        if e.code == 400 and "credit" in detail.lower():
+            raise Fatal(f"Claude API 잔액이 부족합니다. console.anthropic.com에서 충전하세요: {detail}")
+        raise RuntimeError(f"Claude API 오류 {e.code}: {detail}")
     return "".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text")
 
 
@@ -296,7 +321,7 @@ def main():
     state = _load(config.PROCESSED_FILE, {"ids": []})
     mails = fetch_menu_mails(set(state["ids"]), args.reprocess)
     if not mails:
-        print("새 식단표 메일 없음")
+        report("notice", f"새 식단표 메일 없음 (검색어: {config.GMAIL_QUERY})")
         return
 
     failed = 0
@@ -309,7 +334,9 @@ def main():
                 save_week(parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename}))
             except Exception as e:  # 한 파일 실패가 다른 주차 반영을 막지 않게
                 failed += 1
-                print(f"  ✗ {filename}: {e}")
+                if isinstance(e, Fatal):
+                    raise
+                report("error", f"{m['subject']} / {filename} 해석 실패: {e}")
                 break
         else:
             if m["id"] not in state["ids"]:
@@ -317,8 +344,16 @@ def main():
     state["ids"] = state["ids"][-200:]
     _save(config.PROCESSED_FILE, state)
     if failed:
-        sys.exit(1)  # Actions에서 빨간 표시로 실패를 알 수 있게
+        sys.exit(1)
+    report("notice", f"식단표 메일 {len(mails)}통 처리 완료")  # Actions에서 빨간 표시로 실패를 알 수 있게
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Fatal as e:
+        report("error", str(e))
+        sys.exit(1)
+    except Exception as e:  # 예상 못 한 오류도 원인이 화면에 남게
+        report("error", f"예상 못 한 오류: {type(e).__name__}: {e}")
+        raise
