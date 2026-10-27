@@ -57,4 +57,5 @@ jobs:
           git config user.email "nongbab-bot@users.noreply.github.com"
           git add docs/data state originals
           git diff --cached --quiet || git commit -m "식단표 갱신 $(TZ=Asia/Seoul date '+%m/%d %H:%M')"
-          git push
+          # 그사이 다른 커밋이 올라왔어도 실패하지 않게: 최신을 받아 위에 얹은 뒤 올림 (최대 3번)
+          for i in 1 2 3; do git pull -q --rebase origin "$GITHUB_REF_NAME" && git push -q && break; sleep 5; done
