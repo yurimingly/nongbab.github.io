@@ -60,8 +60,10 @@ PROMPT = """첨부한 자료는 회사 구내식당의 주간 식단표입니다
           "meal": "아침 | 점심 | 저녁 중 하나",
           "label": "표 왼쪽 끝에 적힌 구분 이름 그대로 (예: 활기찬 아침, 건강한 점심)",
           "time": "운영 시간 (예: 7:30~8:40)",
+          "note": "그 끼니 전체에 대한 짧은 안내가 있으면 (없으면 빈 문자열)",
           "corners": [
-            {"name": "코너 이름", "main": "대표 메뉴 (원산지)", "items": ["반찬 한 줄씩"], "kcal": 788}
+            {"name": "코너 이름", "main": "대표 메뉴 (원산지)", "items": ["반찬 한 줄씩"], "kcal": 788,
+             "time": "코너별 시간이 따로 있으면 (없으면 빈 문자열)", "note": "코너에 붙은 짧은 안내 (없으면 빈 문자열)"}
           ]
         }
       ]
@@ -187,8 +189,9 @@ def page_images(pdf_bytes):
         return out
 
 
-def xlsx_text(data):
-    """엑셀 식단표를 셀 주소·서식·값 목록으로 바꿉니다 (숨긴 행·열과 빈 셀 제외, 시트마다)."""
+def xlsx_text(data, sheets=None):
+    """엑셀 식단표를 셀 주소·서식·값 목록으로 바꿉니다 (숨긴 행·열과 빈 셀 제외, 시트마다).
+    sheets 가 주어지면 그 이름의 시트만 읽습니다."""
     import io
     try:
         import openpyxl
@@ -198,7 +201,7 @@ def xlsx_text(data):
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     out = []
     for ws in wb.worksheets:
-        if ws.sheet_state != "visible":
+        if ws.sheet_state != "visible" or (sheets and ws.title not in sheets):
             continue
         hidden_rows = {r for r, d in ws.row_dimensions.items() if d.hidden}
         hidden_cols = {c for c, d in ws.column_dimensions.items() if d.hidden}
@@ -225,16 +228,16 @@ def xlsx_text(data):
             merged = ", ".join(str(r) for r in ws.merged_cells.ranges)
             out.append(f"### 시트: {ws.title}\n병합 범위: {merged or '없음'}\n" + "\n".join(lines))
     if not out:
-        raise ValueError("엑셀에 내용이 없습니다")
+        raise ValueError(f"엑셀에 읽을 시트가 없습니다 (찾은 시트: {[w.title for w in wb.worksheets]}, 설정: {sheets})")
     return "\n\n".join(out)
 
 
-def ask_claude(filename, data, hint=""):
+def ask_claude(filename, data, hint="", sheets=None):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise Fatal("ANTHROPIC_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
     if filename.lower().endswith(".xlsx"):
-        content = [{"type": "text", "text": XLSX_NOTE + "\n\n" + xlsx_text(data)}]
+        content = [{"type": "text", "text": XLSX_NOTE + "\n\n" + xlsx_text(data, sheets)}]
     else:
         content = [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
                                                    "data": base64.b64encode(data).decode()}}]
@@ -321,14 +324,17 @@ def normalize(raw, source):
                     items = items[1:]
                 if main:
                     corners.append({"name": str(c.get("name") or "").strip(), "main": main,
-                                    "items": items, "kcal": _kcal(c.get("kcal"))})
-            if corners:
+                                    "items": items, "kcal": _kcal(c.get("kcal")),
+                                    "time": str(c.get("time") or "").strip(),
+                                    "note": str(c.get("note") or "").strip()})
+            note = str(m.get("note") or "").strip()
+            if corners or note:
                 meals.append({"meal": _meal_name(m.get("meal"), m.get("label")),
                               "label": str(m.get("label") or "").strip(),
-                              "time": str(m.get("time") or "").strip(), "corners": corners})
+                              "time": str(m.get("time") or "").strip(), "note": note, "corners": corners})
         meals.sort(key=lambda m: MEAL_ORDER.get(m["meal"], 9))
         days.append({"date": date.isoformat(), "weekday": WEEKDAYS[date.weekday()],
-                     "holiday": bool(d.get("holiday")) or not meals,
+                     "holiday": bool(d.get("holiday")) or not any(m["corners"] for m in meals),
                      "holiday_name": str(d.get("holiday_name") or "").strip(), "meals": meals})
     if not days:
         raise ValueError("요일 데이터가 비어 있습니다")
@@ -351,7 +357,7 @@ def parse_file(cafe, filename, data, source):
     last_err = None
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
-            return normalize(extract_json(ask_claude(filename, data, cafe.get("hint", ""))), source)
+            return normalize(extract_json(ask_claude(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
         except (ValueError, KeyError, json.JSONDecodeError) as e:
             last_err = e
             print(f"  ↻ 해석 재시도 {attempt + 1}: {e}")

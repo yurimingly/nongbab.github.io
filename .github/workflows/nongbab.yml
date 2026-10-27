@@ -2,14 +2,19 @@ name: 농밥 식단표 수집
 
 on:
   schedule:
-    # 매주 금요일 오후 8시(한국 시간)에 한 번 메일함 확인  (cron은 UTC 기준 → 금 11:00)
-    - cron: "0 11 * * 5"
+    # 매주 금요일 오후 8시(한국 시간)에 한 번 메일함 확인  (cron은 UTC 기준 → 금 11:07)
+    # 정각(:00)은 GitHub에 실행이 몰려 몇 시간씩 밀리므로 7분으로 둠
+    - cron: "7 11 * * 5"
   workflow_dispatch:             # Actions 탭에서 '지금 실행' 버튼
     inputs:
       reprocess:
         description: "이미 반영한 메일도 전부 다시 읽기 (읽는 방식을 바꿨을 때)"
         type: boolean
         default: false
+      cafe:
+        description: "한 식당만 (sonbo, center … 비우면 전부)"
+        type: string
+        default: ""
   push:                          # 봇 코드·설정을 고치면 바로 한 번 돌려서 확인
     branches: [main]
     paths: ["nongbab_bot.py", "config.py", ".github/workflows/nongbab.yml"]
@@ -36,14 +41,14 @@ jobs:
         continue-on-error: true   # 설치가 안 되면 PDF만으로 읽음 (정확도만 조금 낮아짐)
         run: |
           which pdftoppm || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
-          pip install -q pillow
+          pip install -q pillow openpyxl
 
       - name: 메일 확인 → 식단 반영
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python nongbab_bot.py ${{ inputs.reprocess && '--reprocess' || '' }}
+        run: python nongbab_bot.py ${{ inputs.reprocess && '--reprocess' || '' }} ${{ inputs.cafe && format('--cafe {0}', inputs.cafe) || '' }}
 
       - name: 바뀐 게 있으면 저장
         if: always()             # 일부 실패해도 성공한 주차는 저장
