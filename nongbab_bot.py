@@ -1,13 +1,15 @@
-"""농밥 봇 — 식단표 메일을 찾아 PDF를 읽고, 앱이 보여줄 JSON을 만듭니다.
+"""농밥 봇 — 식당별 식단표 메일을 찾아 첨부(PDF·엑셀)를 읽고, 앱이 보여줄 JSON을 만듭니다.
 
-흐름:  Gmail(IMAP) 검색 → 새 메일의 PDF 첨부 → Claude가 표를 JSON으로 변환
-      → 형식 검증·정리 → docs/data/weeks/<월요일>.json 저장 → index.json 갱신
+흐름:  config.CAFETERIAS 의 식당마다 Gmail(IMAP) 검색 → 새 메일의 첨부
+      → Claude가 표를 JSON으로 변환 → 형식 검증·정리
+      → docs/data/<식당>/weeks/<월요일>.json 저장 → 목록·오프라인 사본 갱신
 
 사용법:
-  python nongbab_bot.py                 메일함 확인 후 새 식단표 반영 (GitHub Actions가 이걸 실행)
-  python nongbab_bot.py --pdf 식단.pdf   메일 없이 로컬 PDF 하나로 테스트
-  python nongbab_bot.py --reprocess     이미 처리한 메일도 다시 읽기 (파싱 방식 바꿨을 때)
-  python nongbab_bot.py --dump          원본 PDF만 originals/mail/ 에 내려받기 (읽은 메뉴와 대조할 때)
+  python nongbab_bot.py                          메일함 확인 후 새 식단표 반영 (GitHub Actions가 이걸 실행)
+  python nongbab_bot.py --file 식단.xlsx --cafe center   메일 없이 로컬 파일 하나로 테스트
+  python nongbab_bot.py --reprocess              이미 처리한 메일도 다시 읽기 (읽는 방식을 바꿨을 때)
+  python nongbab_bot.py --reprocess --cafe center   한 식당만 다시 읽기
+  python nongbab_bot.py --dump                   원본 첨부만 originals/mail/<식당>/ 에 내려받기 (대조용)
 """
 import argparse
 import base64
@@ -43,7 +45,7 @@ def report(level, msg):
 class Fatal(Exception):
     """설정·로그인처럼 더 진행할 수 없는 문제"""
 
-PROMPT = """첨부한 PDF(와 같은 페이지를 확대한 이미지)는 회사 구내식당의 주간 식단표입니다.
+PROMPT = """첨부한 자료는 회사 구내식당의 주간 식단표입니다 (PDF와 확대 이미지, 또는 엑셀 표를 옮긴 텍스트).
 표 전체를 빠짐없이 아래 JSON 형식으로 옮겨 주세요. JSON만 출력하고 설명은 붙이지 마세요.
 
 {
@@ -80,8 +82,12 @@ PROMPT = """첨부한 PDF(와 같은 페이지를 확대한 이미지)는 회사
 - 원산지 괄호는 해당 메뉴 뒤에 그대로 붙이세요. 예: "모둠커틀렛&밥 (치킨가스-계육:국산/멘치가스-돈육:국산)"
 - 한 칸 안에서 줄이 바뀌었어도 괄호가 이어지는 한 메뉴는 한 줄로 합치세요.
 - 표에 있는 날짜는 모두 days에 넣으세요. 빈 칸이나 회색으로 막힌 날은 holiday=true, meals=[], 사유가 있으면 holiday_name.
-- 메뉴 이름은 확대 이미지에서 한 글자씩 확인해서 정확히 옮기세요 (예: '칩'과 '침', '진'과 '전'을 구분). 읽을 수 없는 글자는 [?].
+- 메뉴 이름은 한 글자씩 확인해서 정확히 옮기세요 (예: '칩'과 '침', '진'과 '전'을 구분). 읽을 수 없는 글자는 [?].
+- 엑셀 텍스트로 받은 경우: 셀 주소(예: C7)와 값이 주어지고, 병합된 셀은 범위로 표시됩니다. 같은 열이 같은 날짜입니다.
+  [굵게]·[배경:색] 표시는 원본 서식이며, 보통 대표 메뉴나 구분 제목을 뜻합니다. 메뉴판 맨 위 안내 문구(캠페인 등)는 메뉴가 아닙니다.
 """
+
+XLSX_NOTE = "아래는 엑셀 식단표의 셀 내용입니다 (형식: 셀주소 [서식] 값). 병합 셀은 '병합 범위' 목록을 참고하세요."
 
 
 # ─────────────────────────── Gmail ───────────────────────────
@@ -89,62 +95,68 @@ def _decode(value):
     return str(make_header(decode_header(value))) if value else ""
 
 
-def fetch_menu_mails(processed_ids, reprocess=False):
-    """검색 조건에 맞는 메일 중 아직 처리하지 않은 것의 PDF들을 오래된 순서로 돌려줍니다."""
-    user = os.environ.get("GMAIL_USER")
-    pw = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
-    if not user or not pw:
-        raise Fatal("GMAIL_USER / GMAIL_APP_PASSWORD 환경변수가 없습니다. README의 '1. Gmail 앱 비밀번호'를 보세요.")
+class Mailbox:
+    """Gmail에 한 번 로그인해서 식당마다 검색합니다."""
 
-    conn = imaplib.IMAP4_SSL(config.IMAP_HOST)
-    try:
-        conn.login(user, pw)
-    except imaplib.IMAP4.error as e:
-        raise Fatal(f"Gmail 로그인 실패: {e}\n→ 일반 비밀번호가 아니라 '앱 비밀번호'를 넣었는지 확인하세요.")
-
-    # 받은편지함 밖(라벨·보관함)에 있어도 찾도록 전체보관함에서 검색.
-    # 한국어 Gmail은 폴더 이름이 '[Gmail]/전체보관함'이라, 이름 대신 \All 표시로 찾습니다.
-    all_mail = None
-    for line in conn.list()[1] or []:
-        text = line.decode(errors="ignore") if isinstance(line, bytes) else str(line)
-        if "\\All" in text:
-            all_mail = text.rsplit(' "/" ', 1)[-1].strip()
-            break
-    if not all_mail or conn.select(all_mail, readonly=True)[0] != "OK":
-        conn.select("INBOX", readonly=True)
-
-    # 한글 검색어는 literal로 넘겨야 Gmail 검색(X-GM-RAW)이 제대로 받습니다
-    conn.literal = config.GMAIL_QUERY.encode("utf-8")
-    status, data = conn.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
-    if status != "OK":
-        conn.logout()
-        raise Fatal(f"메일 검색 실패: {data}")
-
-    uids = data[0].split()[-config.MAX_MAILS_PER_RUN:]
-    found = []
-    for uid in uids:
-        status, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-        if status != "OK" or not msg_data or msg_data[0] is None:
-            continue
-        msg = email.message_from_bytes(msg_data[0][1])
-        msg_id = (msg.get("Message-ID") or f"uid-{uid.decode()}").strip()
-        if msg_id in processed_ids and not reprocess:
-            continue
-        subject = _decode(msg.get("Subject"))
+    def __init__(self):
+        user = os.environ.get("GMAIL_USER")
+        pw = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+        if not user or not pw:
+            raise Fatal("GMAIL_USER / GMAIL_APP_PASSWORD 환경변수가 없습니다. README의 '1. Gmail 앱 비밀번호'를 보세요.")
+        self.conn = imaplib.IMAP4_SSL(config.IMAP_HOST)
         try:
-            received = parsedate_to_datetime(msg.get("Date")).isoformat()
+            self.conn.login(user, pw)
+        except imaplib.IMAP4.error as e:
+            raise Fatal(f"Gmail 로그인 실패: {e}\n→ 일반 비밀번호가 아니라 '앱 비밀번호'를 넣었는지 확인하세요.")
+        # 받은편지함 밖(라벨·보관함)에 있어도 찾도록 전체보관함에서 검색.
+        # 한국어 Gmail은 폴더 이름이 '[Gmail]/전체보관함'이라, 이름 대신 \All 표시로 찾습니다.
+        all_mail = None
+        for line in self.conn.list()[1] or []:
+            text = line.decode(errors="ignore") if isinstance(line, bytes) else str(line)
+            if "\\All" in text:
+                all_mail = text.rsplit(' "/" ', 1)[-1].strip()
+                break
+        if not all_mail or self.conn.select(all_mail, readonly=True)[0] != "OK":
+            self.conn.select("INBOX", readonly=True)
+
+    def close(self):
+        try:
+            self.conn.logout()
         except Exception:
-            received = ""
-        pdfs = []
-        for part in msg.walk():
-            filename = _decode(part.get_filename())
-            is_pdf = filename.lower().endswith(".pdf") or part.get_content_type() == "application/pdf"
-            if is_pdf and part.get_payload(decode=True):
-                pdfs.append((filename or "menu.pdf", part.get_payload(decode=True)))
-        found.append({"id": msg_id, "subject": subject, "received": received, "pdfs": pdfs})
-    conn.logout()
-    found.sort(key=lambda m: m["received"])  # 오래된 것부터 → 같은 주 정정본이면 최신이 덮어씀
-    return found, len(data[0].split())
+            pass
+
+    def fetch(self, query, processed_ids, reprocess=False):
+        """검색 조건에 맞는 메일 중 아직 처리하지 않은 것의 첨부들을 오래된 순서로 돌려줍니다."""
+        self.conn.literal = query.encode("utf-8")  # 한글 검색어는 literal로 넘겨야 Gmail 검색이 받습니다
+        status, data = self.conn.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
+        if status != "OK":
+            raise Fatal(f"메일 검색 실패 ({query}): {data}")
+        all_uids = data[0].split()
+        found = []
+        for uid in all_uids[-config.MAX_MAILS_PER_RUN:]:
+            status, msg_data = self.conn.uid("FETCH", uid, "(RFC822)")
+            if status != "OK" or not msg_data or msg_data[0] is None:
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+            msg_id = (msg.get("Message-ID") or f"uid-{uid.decode()}").strip()
+            if msg_id in processed_ids and not reprocess:
+                continue
+            try:
+                received = parsedate_to_datetime(msg.get("Date")).isoformat()
+            except Exception:
+                received = ""
+            files = []
+            for part in msg.walk():
+                filename = _decode(part.get_filename())
+                ext = os.path.splitext(filename.lower())[1]
+                if part.get_content_type() == "application/pdf" and not ext:
+                    ext, filename = ".pdf", "menu.pdf"
+                payload = part.get_payload(decode=True)
+                if ext in config.ATTACHMENT_TYPES and payload:
+                    files.append((filename, payload))
+            found.append({"id": msg_id, "subject": _decode(msg.get("Subject")), "received": received, "files": files})
+        found.sort(key=lambda m: m["received"])  # 오래된 것부터 → 같은 주 정정본이면 최신이 덮어씀
+        return found, len(all_uids)
 
 
 # ─────────────────────────── PDF → JSON ───────────────────────────
@@ -175,17 +187,62 @@ def page_images(pdf_bytes):
         return out
 
 
-def ask_claude(pdf_bytes):
+def xlsx_text(data):
+    """엑셀 식단표를 셀 주소·서식·값 목록으로 바꿉니다 (숨긴 행·열과 빈 셀 제외, 시트마다)."""
+    import io
+    try:
+        import openpyxl
+    except ImportError:
+        raise Fatal("엑셀을 읽는 openpyxl 이 설치되지 않았습니다 (pip install openpyxl).")
+    from openpyxl.utils import get_column_letter
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    out = []
+    for ws in wb.worksheets:
+        if ws.sheet_state != "visible":
+            continue
+        hidden_rows = {r for r, d in ws.row_dimensions.items() if d.hidden}
+        hidden_cols = {c for c, d in ws.column_dimensions.items() if d.hidden}
+        lines = []
+        for row in ws.iter_rows():
+            for cell in row:
+                v = cell.value
+                if v is None or str(v).strip() == "" or cell.row in hidden_rows:
+                    continue
+                if get_column_letter(cell.column) in hidden_cols:
+                    continue
+                if isinstance(v, (dt.datetime, dt.date)):
+                    v = v.strftime("%Y-%m-%d")
+                tags = []
+                if cell.font is not None and cell.font.bold:
+                    tags.append("굵게")
+                fill = cell.fill.fgColor.rgb if cell.fill is not None and cell.fill.fill_type == "solid" else None
+                if isinstance(fill, str) and fill not in ("00000000", "FFFFFFFF"):
+                    tags.append(f"배경:{fill[-6:]}")
+                tag = f" [{','.join(tags)}]" if tags else ""
+                text = str(v).replace("\r", "").replace("\n", " / ")
+                lines.append(f"{cell.coordinate}{tag} {text}")
+        if lines:
+            merged = ", ".join(str(r) for r in ws.merged_cells.ranges)
+            out.append(f"### 시트: {ws.title}\n병합 범위: {merged or '없음'}\n" + "\n".join(lines))
+    if not out:
+        raise ValueError("엑셀에 내용이 없습니다")
+    return "\n\n".join(out)
+
+
+def ask_claude(filename, data, hint=""):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise Fatal("ANTHROPIC_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
-    content = [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
-                                               "data": base64.b64encode(pdf_bytes).decode()}}]
-    for i, img in enumerate(page_images(pdf_bytes)):
-        content.append({"type": "text", "text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                    "data": base64.b64encode(img).decode()}})
-    content.append({"type": "text", "text": PROMPT})
+    if filename.lower().endswith(".xlsx"):
+        content = [{"type": "text", "text": XLSX_NOTE + "\n\n" + xlsx_text(data)}]
+    else:
+        content = [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                   "data": base64.b64encode(data).decode()}}]
+        for i, img in enumerate(page_images(data)):
+            content.append({"type": "text", "text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                        "data": base64.b64encode(img).decode()}})
+    content.append({"type": "text", "text": PROMPT + (f"\n이 식당 표의 특징:\n{hint}\n" if hint else "")})
     body = {"model": config.CLAUDE_MODEL, "max_tokens": config.CLAUDE_MAX_TOKENS,
             "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request(
@@ -290,15 +347,15 @@ def normalize(raw, source):
             "updated": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds")}
 
 
-def parse_pdf(pdf_bytes, source):
+def parse_file(cafe, filename, data, source):
     last_err = None
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
-            return normalize(extract_json(ask_claude(pdf_bytes)), source)
+            return normalize(extract_json(ask_claude(filename, data, cafe.get("hint", ""))), source)
         except (ValueError, KeyError, json.JSONDecodeError) as e:
             last_err = e
             print(f"  ↻ 해석 재시도 {attempt + 1}: {e}")
-    raise RuntimeError(f"PDF 해석 실패: {last_err}")
+    raise RuntimeError(f"식단표 해석 실패: {last_err}")
 
 
 # ─────────────────────────── 저장 ───────────────────────────
@@ -316,33 +373,65 @@ def _save(path, data):
     tmp.replace(path)  # 앱이 반쯤 쓰인 파일을 읽지 않도록 한 번에 교체
 
 
-def save_week(week, pdf_bytes=None):
-    _save(config.WEEKS_DIR / f"{week['week_start']}.json", week)
-    if pdf_bytes:  # 읽은 결과와 언제든 대조할 수 있게 원본도 같은 이름으로 보관
-        config.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
-        (config.ORIGINALS_DIR / f"{week['week_start']}.pdf").write_bytes(pdf_bytes)
-    rebuild_index()
-    print(f"  ✓ {week['week_start']} ~ {week['week_end']} 저장")
+def cafe_dir(cafe):
+    return config.DATA_DIR / cafe["id"]
+
+
+def save_week(cafe, week, filename=None, data=None):
+    _save(cafe_dir(cafe) / "weeks" / f"{week['week_start']}.json", week)
+    if data:  # 읽은 결과와 언제든 대조할 수 있게 원본도 같은 이름으로 보관
+        odir = config.ORIGINALS_DIR / cafe["id"]
+        odir.mkdir(parents=True, exist_ok=True)
+        ext = os.path.splitext(filename or "")[1].lower() or ".pdf"
+        for old in odir.glob(f"{week['week_start']}.*"):
+            old.unlink()
+        (odir / f"{week['week_start']}{ext}").write_bytes(data)
+    print(f"  ✓ [{cafe['name']}] {week['week_start']} ~ {week['week_end']} 저장")
+
+
+def migrate_layout():
+    """식당이 하나뿐이던 시절 구조(data/weeks, originals/*.pdf)를 손보밥 폴더로 옮깁니다. 여러 번 실행해도 안전."""
+    first = config.CAFETERIAS[0]
+    old_weeks = config.DATA_DIR / "weeks"
+    if old_weeks.is_dir():
+        new = cafe_dir(first) / "weeks"
+        new.mkdir(parents=True, exist_ok=True)
+        for f in old_weeks.glob("*.json"):
+            f.replace(new / f.name)
+        old_weeks.rmdir()
+    (config.DATA_DIR / "index.json").unlink(missing_ok=True)
+    odir = config.ORIGINALS_DIR / first["id"]
+    for f in list(config.ORIGINALS_DIR.glob("*.pdf")):
+        odir.mkdir(parents=True, exist_ok=True)
+        f.replace(odir / f.name)
 
 
 def rebuild_index():
-    """weeks/ 폴더를 기준으로 목록을 다시 만듭니다 (파일과 목록이 어긋날 일이 없게)."""
-    files = sorted(config.WEEKS_DIR.glob("*.json"), reverse=True)
-    for old in files[config.KEEP_WEEKS:]:
-        old.unlink()
-    weeks = []
-    for f in files[:config.KEEP_WEEKS]:
-        w = _load(f, None)
-        if w:
-            weeks.append({"start": w["week_start"], "end": w["week_end"], "file": f"weeks/{f.name}"})
-    index = {"app": config.APP_NAME, "latest": weeks[0]["start"] if weeks else None, "weeks": weeks,
-             "updated": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds")}
-    _save(config.INDEX_FILE, index)
+    """식당별 weeks/ 폴더를 기준으로 목록·식당 목록·오프라인 사본을 다시 만듭니다 (파일과 목록이 어긋나지 않게)."""
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds")
+    bundle, cafes = {}, []
+    for cafe in config.CAFETERIAS:
+        d = cafe_dir(cafe)
+        files = sorted((d / "weeks").glob("*.json"), reverse=True)
+        for old in files[config.KEEP_WEEKS:]:
+            old.unlink()
+        weeks = []
+        for f in files[:config.KEEP_WEEKS]:
+            w = _load(f, None)
+            if w:
+                weeks.append({"start": w["week_start"], "end": w["week_end"], "file": f"weeks/{f.name}"})
+                bundle[f"{cafe['id']}/weeks/{f.name}"] = w
+        index = {"id": cafe["id"], "name": cafe["name"], "place": cafe["place"],
+                 "latest": weeks[0]["start"] if weeks else None, "weeks": weeks, "updated": now}
+        _save(d / "index.json", index)
+        bundle[f"{cafe['id']}/index.json"] = index
+        cafes.append({"id": cafe["id"], "name": cafe["name"], "place": cafe["place"],
+                      "latest": index["latest"], "weeks": len(weeks)})
+    listing = {"app": config.APP_NAME, "cafeterias": cafes, "updated": now}
+    _save(config.CAFETERIAS_FILE, listing)
+    bundle["cafeterias.json"] = listing
 
     # 같은 데이터를 스크립트 한 개로도 저장 → 인터넷이 없거나 앱 안(file://)에서 열어도 식단이 보이게
-    bundle = {"index.json": index}
-    for w in weeks:
-        bundle[w["file"]] = _load(config.DATA_DIR / w["file"], None)
     tmp = config.BUNDLE_FILE.with_suffix(".tmp")
     tmp.write_text("window.NONGBAB_BUNDLE=" + json.dumps(bundle, ensure_ascii=False, separators=(",", ":")) + ";\n",
                    encoding="utf-8")
@@ -356,76 +445,101 @@ def write_status(result, message):
 
 
 # ─────────────────────────── 실행 ───────────────────────────
+def pick_cafes(cafe_id):
+    if not cafe_id:
+        return config.CAFETERIAS
+    cafes = [c for c in config.CAFETERIAS if c["id"] == cafe_id]
+    if not cafes:
+        raise Fatal(f"식당 id '{cafe_id}' 가 config.CAFETERIAS 에 없습니다: {[c['id'] for c in config.CAFETERIAS]}")
+    return cafes
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", help="메일 대신 로컬 PDF 파일로 테스트")
+    ap.add_argument("--cafe", help="한 식당만 처리 (config.CAFETERIAS 의 id)")
+    ap.add_argument("--file", help="메일 대신 로컬 식단표 파일(PDF·xlsx)로 테스트 (--cafe 필요)")
     ap.add_argument("--reprocess", action="store_true", help="이미 처리한 메일도 다시 해석")
     ap.add_argument("--dump", nargs="?", const=str(config.ORIGINALS_DIR / "mail"), metavar="DIR",
-                    help="해석하지 않고 검색된 메일의 원본 PDF만 저장 (기본: originals/mail/)")
+                    help="해석하지 않고 검색된 메일의 원본 첨부만 저장 (기본: originals/mail/<식당>/)")
     args = ap.parse_args()
+    cafes = pick_cafes(args.cafe)
+    migrate_layout()
 
-    if args.dump:
-        out = os.path.abspath(args.dump)
-        os.makedirs(out, exist_ok=True)
-        mails, matched = fetch_menu_mails(set(), reprocess=True)
-        n = 0
-        for m in mails:
-            for filename, data in m["pdfs"]:
-                n += 1
-                safe = re.sub(r"[^0-9A-Za-z가-힣._-]", "_", filename)
-                with open(os.path.join(out, f"{m['received'][:10]}_{n:02d}_{safe}"), "wb") as f:
-                    f.write(data)
-        report("notice", f"원본 PDF {n}개 저장 (검색된 메일 {matched}통)")
+    if args.file:
+        if not args.cafe:
+            raise Fatal("--file 은 --cafe 와 함께 써 주세요.")
+        data = open(args.file, "rb").read()
+        name = os.path.basename(args.file)
+        save_week(cafes[0], parse_file(cafes[0], name, data, {"filename": name}), name, data)
+        rebuild_index()
         return
 
-    if args.pdf:
-        with open(args.pdf, "rb") as f:
-            data = f.read()
-            save_week(parse_pdf(data, {"filename": os.path.basename(args.pdf)}), data)
-        return
+    box = Mailbox()
+    try:
+        if args.dump:
+            total = []
+            for cafe in cafes:
+                out = os.path.join(os.path.abspath(args.dump), cafe["id"])
+                os.makedirs(out, exist_ok=True)
+                mails, matched = box.fetch(cafe["query"], set(), reprocess=True)
+                n = 0
+                for m in mails:
+                    for filename, data in m["files"]:
+                        n += 1
+                        safe = re.sub(r"[^0-9A-Za-z가-힣._-]", "_", filename)
+                        with open(os.path.join(out, f"{m['received'][:10]}_{n:02d}_{safe}"), "wb") as f:
+                            f.write(data)
+                total.append(f"{cafe['name']} {n}개(메일 {matched}통)")
+            report("notice", "원본 첨부 저장: " + ", ".join(total))
+            return
 
-    state = _load(config.PROCESSED_FILE, {"ids": []})
-    mails, matched = fetch_menu_mails(set(state["ids"]), args.reprocess)
-    if not mails:
-        report("notice", f"새 식단표 메일 없음 — 검색된 메일 {matched}통은 모두 반영됨 (검색어: {config.GMAIL_QUERY})")
-        write_status("none", "새 식단표 없음")
-        return
+        state = _load(config.PROCESSED_FILE, {"ids": []})
+        failed, saved, summary = 0, {}, []
+        for cafe in cafes:
+            mails, matched = box.fetch(cafe["query"], set(state["ids"]), args.reprocess)
+            if not mails:
+                summary.append(f"{cafe['name']}: 새 메일 없음 (검색된 {matched}통 모두 반영됨)")
+                continue
+            for m in mails:
+                print(f"● [{cafe['name']}] {m['received'][:16]}  {m['subject']}")
+                if not m["files"]:
+                    print("  - 읽을 수 있는 첨부(PDF·xlsx) 없음, 건너뜀")
+                for filename, data in m["files"]:
+                    try:
+                        week = parse_file(cafe, filename, data,
+                                          {"subject": m["subject"], "received": m["received"], "filename": filename})
+                        save_week(cafe, week, filename, data)
+                        saved.setdefault(cafe["name"], []).append(week["week_start"])
+                    except Exception as e:  # 한 파일 실패가 다른 주차·식당 반영을 막지 않게
+                        if isinstance(e, Fatal):
+                            raise
+                        failed += 1
+                        report("error", f"[{cafe['name']}] {m['subject']} / {filename} 해석 실패: {e}")
+                        break
+                else:
+                    if m["id"] not in state["ids"]:
+                        state["ids"].append(m["id"])  # 성공한 메일만 '처리됨' → 실패한 건 다음 실행에 재시도
+            summary.append(f"{cafe['name']}: 메일 {len(mails)}통 처리")
+        state["ids"] = state["ids"][-300:]
+        _save(config.PROCESSED_FILE, state)
+    finally:
+        box.close()
 
-    failed = 0
-    saved_weeks = []
-    for m in mails:
-        print(f"● {m['received'][:16]}  {m['subject']}")
-        if not m["pdfs"]:
-            print("  - PDF 첨부 없음, 건너뜀")
-        for filename, data in m["pdfs"]:
-            try:
-                week = parse_pdf(data, {"subject": m["subject"], "received": m["received"], "filename": filename})
-                save_week(week, data)
-                saved_weeks.append(week)
-            except Exception as e:  # 한 파일 실패가 다른 주차 반영을 막지 않게
-                failed += 1
-                if isinstance(e, Fatal):
-                    raise
-                report("error", f"{m['subject']} / {filename} 해석 실패: {e}")
-                break
-        else:
-            if m["id"] not in state["ids"]:
-                state["ids"].append(m["id"])  # 성공한 메일만 '처리됨' → 실패한 건 다음 실행에 재시도
-    state["ids"] = state["ids"][-200:]
-    _save(config.PROCESSED_FILE, state)
-    if saved_weeks:
-        latest = max(saved_weeks, key=lambda w: w["week_start"])
-        msg = f"{latest['week_start'][5:].replace('-', '/')}주 식단 반영"
-        if len(saved_weeks) > 1:
-            msg += f" 외 {len(saved_weeks) - 1}주"
+    rebuild_index()
+    if saved:
+        parts = []
+        for name, starts in saved.items():
+            latest = max(starts)[5:].replace("-", "/")
+            parts.append(f"{name} {latest}주" + (f" 외 {len(starts) - 1}주" if len(starts) > 1 else ""))
+        msg = ", ".join(parts) + " 반영"
     else:
         msg = "새 식단표 없음"
     if failed:
         msg += f" · {failed}건 읽기 실패"
-    write_status("error" if failed and not saved_weeks else "new" if saved_weeks else "none", msg)
+    write_status("error" if failed and not saved else "new" if saved else "none", msg)
+    report("notice", " / ".join(summary))
     if failed:
-        sys.exit(1)
-    report("notice", f"식단표 메일 {len(mails)}통 처리 완료")  # Actions에서 빨간 표시로 실패를 알 수 있게
+        sys.exit(1)  # Actions에서 빨간 표시로 실패를 알 수 있게
 
 
 if __name__ == "__main__":
