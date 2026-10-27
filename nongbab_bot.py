@@ -97,6 +97,22 @@ def _decode(value):
     return str(make_header(decode_header(value))) if value else ""
 
 
+def processed_key(cafe_id, msg_id):
+    return f"{cafe_id}|{msg_id}"
+
+
+def load_state():
+    """처리한 메일 목록. 식당이 둘(손보·본관)이던 시절의 식당 구분 없는 기록은 그 두 식당 기록으로 옮김."""
+    state = _load(config.PROCESSED_FILE, {"ids": []})
+    ids = []
+    for i in state.get("ids", []):
+        if "|" in i:
+            ids.append(i)
+        else:
+            ids += [processed_key("sonbo", i), processed_key("center", i)]
+    return {"ids": list(dict.fromkeys(ids))}
+
+
 class Mailbox:
     """Gmail에 한 번 로그인해서 식당마다 검색합니다."""
 
@@ -127,8 +143,8 @@ class Mailbox:
         except Exception:
             pass
 
-    def fetch(self, query, processed_ids, reprocess=False):
-        """검색 조건에 맞는 메일 중 아직 처리하지 않은 것의 첨부들을 오래된 순서로 돌려줍니다."""
+    def fetch(self, query, processed_ids, reprocess=False, cafe_id=""):
+        """검색 조건에 맞는 메일 중 이 식당에서 아직 처리하지 않은 것의 첨부들을 오래된 순서로 돌려줍니다."""
         self.conn.literal = query.encode("utf-8")  # 한글 검색어는 literal로 넘겨야 Gmail 검색이 받습니다
         status, data = self.conn.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
         if status != "OK":
@@ -141,7 +157,7 @@ class Mailbox:
                 continue
             msg = email.message_from_bytes(msg_data[0][1])
             msg_id = (msg.get("Message-ID") or f"uid-{uid.decode()}").strip()
-            if msg_id in processed_ids and not reprocess:
+            if processed_key(cafe_id, msg_id) in processed_ids and not reprocess:
                 continue
             try:
                 received = parsedate_to_datetime(msg.get("Date")).isoformat()
@@ -499,10 +515,10 @@ def main():
             report("notice", "원본 첨부 저장: " + ", ".join(total))
             return
 
-        state = _load(config.PROCESSED_FILE, {"ids": []})
+        state = load_state()
         failed, saved, summary = 0, {}, []
         for cafe in cafes:
-            mails, matched = box.fetch(cafe["query"], set(state["ids"]), args.reprocess)
+            mails, matched = box.fetch(cafe["query"], set(state["ids"]), args.reprocess, cafe["id"])
             if not mails:
                 summary.append(f"{cafe['name']}: 새 메일 없음 (검색된 {matched}통 모두 반영됨)")
                 continue
@@ -523,10 +539,11 @@ def main():
                         report("error", f"[{cafe['name']}] {m['subject']} / {filename} 해석 실패: {e}")
                         break
                 else:
-                    if m["id"] not in state["ids"]:
-                        state["ids"].append(m["id"])  # 성공한 메일만 '처리됨' → 실패한 건 다음 실행에 재시도
+                    key = processed_key(cafe["id"], m["id"])
+                    if key not in state["ids"]:
+                        state["ids"].append(key)  # 성공한 메일만 '처리됨' → 실패한 건 다음 실행에 재시도
             summary.append(f"{cafe['name']}: 메일 {len(mails)}통 처리")
-        state["ids"] = state["ids"][-300:]
+        state["ids"] = state["ids"][-500:]
         _save(config.PROCESSED_FILE, state)
     finally:
         box.close()

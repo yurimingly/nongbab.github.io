@@ -15,6 +15,9 @@ from pathlib import Path
 #   query  Gmail 검색어 (Gmail 검색창에 그대로 넣어 결과가 맞는지 확인해 보세요)
 #   sheets 엑셀일 때 읽을 시트 (None이면 전부)
 #   hint   이 식당 표만의 특징 (읽을 때 참고)
+# 중앙회 본관·신관 메뉴는 진하윤 주임이 보내는 메일 한 통(엑셀 하나, 시트 두 개)에 같이 옵니다.
+CENTRAL_QUERY = 'from:진하윤 has:attachment filename:xlsx newer_than:60d'
+
 CAFETERIAS = [
     {
         "id": "sonbo",
@@ -28,8 +31,8 @@ CAFETERIAS = [
         "id": "center",
         "name": "중앙회밥",
         "place": "농협중앙회 본관 구내식당",
-        "query": 'subject:("본관 구내식당" "주간메뉴표") has:attachment newer_than:60d',
-        "sheets": ["본관"],   # 엑셀에 신관(농협은행) 시트도 같이 오므로 본관만 읽음
+        "query": CENTRAL_QUERY,
+        "sheets": ["본관"],   # 같은 엑셀에 신관 시트도 있어 본관만 읽음 (신관은 아래 '신관밥')
         "hint": """\
 - 아침: 굵은 글씨 첫 메뉴가 대표 메뉴(main), 그 아래가 반찬(items). 코너 이름은 "", 시간 07:30~08:40.
   맨 위 '천원으로 즐기는 구내식당 아침밥…' 같은 캠페인 문구는 메뉴가 아니니 넣지 마세요.
@@ -41,6 +44,24 @@ CAFETERIAS = [
 - '<행 사> 양곡부 …'처럼 행사로 코너 칸이 막힌 날은 그 코너들을 넣지 말고, 그 끼니의 note에 '행사: 양곡부 2026년 제3차 …'처럼 적으세요.
 - 샐러드바: 첫 줄이 main, 그 아래(음료·디저트)는 items.
 - 맨 아래 원산지 표는 메뉴가 아닙니다.""",
+    },
+    {
+        "id": "singwan",
+        "name": "신관밥",
+        "place": "농협은행 신관 구내식당",
+        "query": CENTRAL_QUERY,
+        "sheets": ["신관"],
+        "hint": """\
+- 셀 하나에 메뉴 여러 줄이 ' / '로 이어져 있습니다. 그 칸의 첫 메뉴가 대표 메뉴(main), 나머지가 items입니다.
+- 아침: 코너 이름 "", 끼니 time 07:30~08:40. 맨 위 '천원으로 셀프 계란후라이…' 같은 캠페인 문구는 메뉴가 아닙니다.
+- 점심: 표 왼쪽 'A 코너' → "A코너", 'B 코너' → "B코너", '샐러드바' → "샐러드바". 끼니 time은 11:30~13:00.
+  (운영 시간 안내의 A조·B조는 층별 식사 시간이지 코너가 아닙니다.)
+- 칸 위에 굵게 따로 적힌 '균형미먹는날♪', '중식DAY' 같은 짧은 문구는 그 아래 코너의 note에 넣으세요.
+- 금요일처럼 A·B 칸이 하나로 합쳐지고 '금요행복밥상'이 적힌 날은 코너 하나(name "금요행복밥상")로 넣으세요.
+  '*애플소보로토스토*'처럼 별표로 감싼 디저트는 별표를 빼고 items 맨 끝에 넣으세요.
+- '[행 사] 종합기획부 오찬'처럼 행사로 막힌 칸은 그 코너를 넣지 말고 그 끼니의 note에 '행사: 종합기획부 오찬'처럼 적으세요.
+- 샐러드바 '야채샐러드 / 드레싱'은 main "야채샐러드", items ["드레싱"].
+- 아래쪽 '행 사' 칸, 운영 시간 안내, 원산지 표는 메뉴가 아닙니다.""",
     },
 ]
 ATTACHMENT_TYPES = (".pdf", ".xlsx")  # 읽을 수 있는 첨부 형식
@@ -61,7 +82,7 @@ CAFETERIAS_FILE = DATA_DIR / "cafeterias.json"  # 앱이 탭을 그릴 때 읽�
 STATUS_FILE = DATA_DIR / "status.json"        # 마지막 실행 시각·결과 (앱의 새로고침 버튼이 사용)
 BUNDLE_FILE = DATA_DIR / "bundle.js"          # 위 데이터를 한 파일로 묶은 오프라인·앱 내장용 사본
 ORIGINALS_DIR = ROOT / "originals"           # 원본 식단표 (originals/<id>/<월요일>.pdf|xlsx, 대조용)
-PROCESSED_FILE = ROOT / "state" / "processed.json"  # 이미 처리한 메일 Message-ID
+PROCESSED_FILE = ROOT / "state" / "processed.json"  # 이미 처리한 메일 ("식당id|Message-ID", 한 메일이 여러 식당에 쓰일 수 있어 식당별)
 KEEP_WEEKS = 12                 # 앱에서 넘겨볼 수 있는 과거 주차 수
 
 # ── 표시 이름 ────────────────────────────────────────────
