@@ -7,12 +7,8 @@ on:
     - cron: "7 11 * * 5"
   workflow_dispatch:             # Actions 탭에서 '지금 실행' 버튼
     inputs:
-      reprocess:
-        description: "이미 반영한 메일도 전부 다시 읽기 (읽는 방식을 바꿨을 때)"
-        type: boolean
-        default: false
       cafe:
-        description: "한 식당만 (sonbo, center … 비우면 전부)"
+        description: "한 식당만 (sonbo, center, singwan … 비우면 전부). 이미 읽은 파일은 다시 읽지 않음"
         type: string
         default: ""
   push:                          # 봇 코드·설정을 고치면 바로 한 번 돌려서 확인
@@ -48,7 +44,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python nongbab_bot.py ${{ inputs.reprocess && '--reprocess' || '' }} ${{ inputs.cafe && format('--cafe {0}', inputs.cafe) || '' }}
+        run: python nongbab_bot.py ${{ inputs.cafe && format('--cafe {0}', inputs.cafe) || '' }}
 
       - name: 바뀐 게 있으면 저장
         if: always()             # 일부 실패해도 성공한 주차는 저장

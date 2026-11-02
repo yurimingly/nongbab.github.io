@@ -13,7 +13,8 @@ from pathlib import Path
 #   name   앱 탭에 보이는 이름
 #   place  앱 아래쪽에 작게 보이는 식당 설명
 #   query  Gmail 검색어 (Gmail 검색창에 그대로 넣어 결과가 맞는지 확인해 보세요)
-#   sheets 엑셀일 때 읽을 시트 (None이면 전부)
+#   sheets 엑셀일 때 읽을 시트: 시트 이름 또는 표 위쪽(1~3행)에 이 글자가 있는 시트 (None이면 전부)
+#          맞는 시트가 없으면 '이번 주엔 이 식당 메뉴 없음'으로 보고 넘어감 (비용·오류 없음)
 #   hint   이 식당 표만의 특징 (읽을 때 참고)
 # 중앙회 본관·신관 메뉴는 진하윤 주임이 보내는 메일 한 통(엑셀 하나, 시트 두 개)에 같이 옵니다.
 CENTRAL_QUERY = 'from:진하윤 has:attachment filename:xlsx newer_than:60d'
@@ -32,7 +33,7 @@ CAFETERIAS = [
         "name": "중앙회밥",
         "place": "농협중앙회 본관 구내식당",
         "query": CENTRAL_QUERY,
-        "sheets": ["본관"],   # 같은 엑셀에 신관 시트도 있어 본관만 읽음 (신관은 아래 '신관밥')
+        "sheets": ["본관"],   # 시트 이름이 '1102'처럼 바뀌어도 표 제목 '주간메뉴표(본관)'으로 찾음
         "hint": """\
 - 아침: 굵은 글씨 첫 메뉴가 대표 메뉴(main), 그 아래가 반찬(items). 코너 이름은 "", 시간 07:30~08:40.
   맨 위 '천원으로 즐기는 구내식당 아침밥…' 같은 캠페인 문구는 메뉴가 아니니 넣지 마세요.
@@ -71,7 +72,8 @@ MAX_MAILS_PER_RUN = 10          # 식당마다 한 번 실행에 확인할 최�
 # ── 식단표 해석 ────────────────────────────────────────────
 CLAUDE_MODEL = "claude-opus-5-5"   # 주 1회라 비용보다 정확도 우선
 CLAUDE_MAX_TOKENS = 16000
-PARSE_RETRIES = 2               # JSON 형식이 틀리면 다시 시도할 횟수
+PARSE_RETRIES = 1               # 응답 형식이 틀렸을 때만 1번 더 (호출마다 돈이 드므로 최소로)
+MAX_FAILS_PER_FILE = 2          # 같은 파일이 이만큼 실패하면 다음부터는 다시 시도하지 않음 (매주 돈만 나가는 것 방지)
 RENDER_DPI = 200                # PDF 작은 글씨 확인용으로 함께 보내는 확대 이미지 해상도
 
 # ── 저장 위치 (GitHub Pages가 docs/ 를 그대로 서비스) ─────────────
@@ -82,6 +84,7 @@ CAFETERIAS_FILE = DATA_DIR / "cafeterias.json"  # 앱이 탭을 그릴 때 읽�
 STATUS_FILE = DATA_DIR / "status.json"        # 마지막 실행 시각·결과 (앱의 새로고침 버튼이 사용)
 BUNDLE_FILE = DATA_DIR / "bundle.js"          # 위 데이터를 한 파일로 묶은 오프라인·앱 내장용 사본
 ORIGINALS_DIR = ROOT / "originals"           # 원본 식단표 (originals/<id>/<월요일>.pdf|xlsx, 대조용)
+PARSED_FILE = ROOT / "state" / "parsed.json"   # 이미 읽은 파일 지문(SHA-256) → 같은 파일은 절대 다시 API로 읽지 않음
 PROCESSED_FILE = ROOT / "state" / "processed.json"  # 이미 처리한 메일 ("식당id|Message-ID", 한 메일이 여러 식당에 쓰일 수 있어 식당별)
 KEEP_WEEKS = 12                 # 앱에서 넘겨볼 수 있는 과거 주차 수
 

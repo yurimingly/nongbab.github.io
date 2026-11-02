@@ -7,8 +7,11 @@
 사용법:
   python nongbab_bot.py                          메일함 확인 후 새 식단표 반영 (GitHub Actions가 이걸 실행)
   python nongbab_bot.py --file 식단.xlsx --cafe center   메일 없이 로컬 파일 하나로 테스트
-  python nongbab_bot.py --reprocess              이미 처리한 메일도 다시 읽기 (읽는 방식을 바꿨을 때)
-  python nongbab_bot.py --reprocess --cafe center   한 식당만 다시 읽기
+  python nongbab_bot.py --reprocess              처리한 메일도 다시 훑기 (단, 이미 읽은 파일은 API를 부르지 않음 → 무료)
+  python nongbab_bot.py --reprocess --force --cafe center   정말로 다시 읽기 (API 비용 발생, 읽는 방식을 바꿨을 때만)
+
+비용 원칙: 같은 첨부 파일(내용 기준)은 한 번만 API로 읽습니다. 메일이 다시 오거나 전달돼도, 버튼을 여러 번 눌러도
+          이미 읽은 파일이면 돈이 들지 않습니다. 실패한 파일은 최대 config.MAX_FAILS_PER_FILE 번까지만 시도합니다.
   python nongbab_bot.py --dump                   원본 첨부만 originals/mail/<식당>/ 에 내려받기 (대조용)
 """
 import argparse
@@ -43,7 +46,11 @@ def report(level, msg):
 
 
 class Fatal(Exception):
-    """설정·로그인처럼 더 진행할 수 없는 문제"""
+    """설정·로그인·잔액처럼 더 진행할 수 없는 문제"""
+
+
+class NotInFile(Exception):
+    """이 첨부에 이 식당 메뉴가 없음 (예: 이번 주 엑셀에 신관 시트가 빠짐) — 오류 아님, 비용 없음"""
 
 PROMPT = """첨부한 자료는 회사 구내식당의 주간 식단표입니다 (PDF와 확대 이미지, 또는 엑셀 표를 옮긴 텍스트).
 표 전체를 빠짐없이 아래 JSON 형식으로 옮겨 주세요. JSON만 출력하고 설명은 붙이지 마세요.
@@ -95,6 +102,23 @@ XLSX_NOTE = "아래는 엑셀 식단표의 셀 내용입니다 (형식: 셀주�
 # ─────────────────────────── Gmail ───────────────────────────
 def _decode(value):
     return str(make_header(decode_header(value))) if value else ""
+
+
+def file_key(cafe_id, data):
+    import hashlib
+    return f"{cafe_id}|{hashlib.sha256(data).hexdigest()}"
+
+
+def load_parsed():
+    """이미 읽은 파일 지문 목록. 처음엔 보관 중인 원본(originals/<식당>/)으로 채워서, 지금까지 읽은 것도 다시 안 읽게 함."""
+    parsed = _load(config.PARSED_FILE, None)
+    if parsed is None:
+        parsed = {"done": {}, "failed": {}}
+        for cafe in config.CAFETERIAS:
+            for f in (config.ORIGINALS_DIR / cafe["id"]).glob("*.*"):
+                parsed["done"][file_key(cafe["id"], f.read_bytes())] = {"week": f.stem, "file": f.name}
+    parsed.setdefault("done", {}); parsed.setdefault("failed", {})
+    return parsed
 
 
 def processed_key(cafe_id, msg_id):
@@ -205,6 +229,14 @@ def page_images(pdf_bytes):
         return out
 
 
+def sheet_matches(ws, sheets):
+    """시트 이름이 바뀌어도('본관' → '1102') 찾도록, 이름이나 표 위쪽 1~3행 글자로 판단합니다."""
+    if not sheets:
+        return True
+    top = " ".join(str(c.value) for row in ws.iter_rows(min_row=1, max_row=3) for c in row if c.value)
+    return any(k in ws.title or k in top for k in sheets)
+
+
 def xlsx_text(data, sheets=None):
     """엑셀 식단표를 셀 주소·서식·값 목록으로 바꿉니다 (숨긴 행·열과 빈 셀 제외, 시트마다).
     sheets 가 주어지면 그 이름의 시트만 읽습니다."""
@@ -217,7 +249,7 @@ def xlsx_text(data, sheets=None):
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     out = []
     for ws in wb.worksheets:
-        if ws.sheet_state != "visible" or (sheets and ws.title not in sheets):
+        if ws.sheet_state != "visible" or not sheet_matches(ws, sheets):
             continue
         hidden_rows = {r for r, d in ws.row_dimensions.items() if d.hidden}
         hidden_cols = {c for c, d in ws.column_dimensions.items() if d.hidden}
@@ -244,7 +276,7 @@ def xlsx_text(data, sheets=None):
             merged = ", ".join(str(r) for r in ws.merged_cells.ranges)
             out.append(f"### 시트: {ws.title}\n병합 범위: {merged or '없음'}\n" + "\n".join(lines))
     if not out:
-        raise ValueError(f"엑셀에 읽을 시트가 없습니다 (찾은 시트: {[w.title for w in wb.worksheets]}, 설정: {sheets})")
+        raise NotInFile(f"이 엑셀에 {sheets} 시트가 없음 (있는 시트: {[w.title for w in wb.worksheets]})")
     return "\n\n".join(out)
 
 
@@ -374,9 +406,11 @@ def parse_file(cafe, filename, data, source):
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
             return normalize(extract_json(ask_claude(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
+        except NotInFile:
+            raise
         except (ValueError, KeyError, json.JSONDecodeError) as e:
             last_err = e
-            print(f"  ↻ 해석 재시도 {attempt + 1}: {e}")
+            print(f"  ↻ 응답 형식 오류, 재시도 {attempt + 1}: {e}")
     raise RuntimeError(f"식단표 해석 실패: {last_err}")
 
 
@@ -480,7 +514,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cafe", help="한 식당만 처리 (config.CAFETERIAS 의 id)")
     ap.add_argument("--file", help="메일 대신 로컬 식단표 파일(PDF·xlsx)로 테스트 (--cafe 필요)")
-    ap.add_argument("--reprocess", action="store_true", help="이미 처리한 메일도 다시 해석")
+    ap.add_argument("--reprocess", action="store_true", help="처리한 메일도 다시 훑기 (이미 읽은 파일은 무료로 건너뜀)")
+    ap.add_argument("--force", action="store_true", help="이미 읽은 파일도 API로 다시 읽기 (비용 발생)")
     ap.add_argument("--dump", nargs="?", const=str(config.ORIGINALS_DIR / "mail"), metavar="DIR",
                     help="해석하지 않고 검색된 메일의 원본 첨부만 저장 (기본: originals/mail/<식당>/)")
     args = ap.parse_args()
@@ -516,7 +551,8 @@ def main():
             return
 
         state = load_state()
-        failed, saved, summary = 0, {}, []
+        parsed = load_parsed()
+        failed, saved, summary, api_calls = 0, {}, [], 0
         for cafe in cafes:
             mails, matched = box.fetch(cafe["query"], set(state["ids"]), args.reprocess, cafe["id"])
             if not mails:
@@ -527,16 +563,34 @@ def main():
                 if not m["files"]:
                     print("  - 읽을 수 있는 첨부(PDF·xlsx) 없음, 건너뜀")
                 for filename, data in m["files"]:
+                    key = file_key(cafe["id"], data)
+                    if key in parsed["done"] and not args.force:
+                        print(f"  = 이미 읽은 파일 ({parsed['done'][key].get('week', '')}주), API 호출 안 함")
+                        continue
+                    if parsed["failed"].get(key, 0) >= config.MAX_FAILS_PER_FILE and not args.force:
+                        print(f"  - {filename}: {config.MAX_FAILS_PER_FILE}번 실패한 파일이라 더 시도 안 함")
+                        continue
                     try:
-                        week = parse_file(cafe, filename, data,
-                                          {"subject": m["subject"], "received": m["received"], "filename": filename})
+                        src = {"subject": m["subject"], "received": m["received"], "filename": filename}
+                        if filename.lower().endswith(".xlsx"):
+                            xlsx_text(data, cafe.get("sheets"))  # 이 식당 시트가 없으면 API 부르기 전에 걸러냄
+                        api_calls += 1
+                        week = parse_file(cafe, filename, data, src)
                         save_week(cafe, week, filename, data)
+                        parsed["done"][key] = {"week": week["week_start"], "file": filename}
+                        parsed["failed"].pop(key, None)
                         saved.setdefault(cafe["name"], []).append(week["week_start"])
+                    except NotInFile as e:
+                        print(f"  - {e} → 이번 주엔 {cafe['name']} 메뉴 없음")
+                        parsed["done"][key] = {"week": "", "file": filename, "none": True}
                     except Exception as e:  # 한 파일 실패가 다른 주차·식당 반영을 막지 않게
                         if isinstance(e, Fatal):
+                            _save(config.PARSED_FILE, parsed)
                             raise
                         failed += 1
-                        report("error", f"[{cafe['name']}] {m['subject']} / {filename} 해석 실패: {e}")
+                        parsed["failed"][key] = parsed["failed"].get(key, 0) + 1
+                        report("error", f"[{cafe['name']}] {m['subject']} / {filename} 해석 실패 "
+                                        f"({parsed['failed'][key]}/{config.MAX_FAILS_PER_FILE}번째): {e}")
                         break
                 else:
                     key = processed_key(cafe["id"], m["id"])
@@ -545,6 +599,7 @@ def main():
             summary.append(f"{cafe['name']}: 메일 {len(mails)}통 처리")
         state["ids"] = state["ids"][-500:]
         _save(config.PROCESSED_FILE, state)
+        _save(config.PARSED_FILE, parsed)
     finally:
         box.close()
 
@@ -560,7 +615,7 @@ def main():
     if failed:
         msg += f" · {failed}건 읽기 실패"
     write_status("error" if failed and not saved else "new" if saved else "none", msg)
-    report("notice", " / ".join(summary))
+    report("notice", " / ".join(summary) + f" · API 호출 {api_calls}번")
     if failed:
         sys.exit(1)  # Actions에서 빨간 표시로 실패를 알 수 있게
 
@@ -570,7 +625,7 @@ if __name__ == "__main__":
         main()
     except Fatal as e:
         report("error", str(e))
-        write_status("error", "확인 실패 — 설정을 확인해 주세요")
+        write_status("error", "Claude API 잔액이 부족해요" if "잔액" in str(e) else "확인 실패 — 설정을 확인해 주세요")
         sys.exit(1)
     except Exception as e:  # 예상 못 한 오류도 원인이 화면에 남게
         report("error", f"예상 못 한 오류: {type(e).__name__}: {e}")
