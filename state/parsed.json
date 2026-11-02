@@ -1,0 +1,62 @@
+{
+ "done": {
+  "sonbo|bfaad4623ff383b683ae4f9bdcf5a5c78c6a4377b57122f7d9672ad19faf3752": {
+   "week": "2026-11-02",
+   "file": "2026-11-02.pdf"
+  },
+  "sonbo|7243c39d8a880a44c7304e0726ac1af23a3c321e3cd76ac4008a1cda97f49747": {
+   "week": "2026-09-21",
+   "file": "2026-09-21.pdf"
+  },
+  "sonbo|1004812767546065f70635b289223ed54e193d2c396f53425e964619fbb90aa3": {
+   "week": "2026-10-12",
+   "file": "2026-10-12.pdf"
+  },
+  "sonbo|c4e4dde9ed989c8ba326fb9d924261f9710c56f43253772a384af72dc4f20310": {
+   "week": "2026-10-05",
+   "file": "2026-10-05.pdf"
+  },
+  "sonbo|ddf5da62be4aec2e97963ccc927168df827ad0209df8d4d6c74ddd17e5cdfbf6": {
+   "week": "2026-09-28",
+   "file": "2026-09-28.pdf"
+  },
+  "sonbo|e6745c806d5ada281013ec4aebcd0e5612dfccde114ae12de18ab6aab4da66c5": {
+   "week": "2026-09-14",
+   "file": "2026-09-14.pdf"
+  },
+  "sonbo|17d6b4ef76f45de3e4676c03158c0bd94a0eb312e6ad92ee45e29feab1b4b46c": {
+   "week": "2026-10-26",
+   "file": "2026-10-26.pdf"
+  },
+  "sonbo|beb8ec0519a8100972a1eeef2e0a6c3342d1eb5627bd6a92a2a0850d27c7f9cc": {
+   "week": "2026-10-19",
+   "file": "2026-10-19.pdf"
+  },
+  "sonbo|43db701c7c29aaf19317b17f28f70669f064a3e5da9dc9bd2a0c3177a1b3dffd": {
+   "week": "2026-09-07",
+   "file": "2026-09-07.pdf"
+  },
+  "sonbo|752068ec27aaae4d0fee17425425dca985dd96237f276270986f5260804f7630": {
+   "week": "2026-08-31",
+   "file": "2026-08-31.pdf"
+  },
+  "center|8ebbd76cd6c906445dd606c69702344ef6e66b566f0ee39734616c7a8107547c": {
+   "week": "2026-10-26",
+   "file": "2026-10-26.xlsx"
+  },
+  "singwan|8ebbd76cd6c906445dd606c69702344ef6e66b566f0ee39734616c7a8107547c": {
+   "week": "2026-10-26",
+   "file": "2026-10-26.xlsx"
+  },
+  "center|d26d490d85130e3f2efbaecc246ae4786b87f2c52913f9448614d4717340026f": {
+   "week": "2026-11-02",
+   "file": "주간메뉴표(11-1).xlsx"
+  },
+  "singwan|d26d490d85130e3f2efbaecc246ae4786b87f2c52913f9448614d4717340026f": {
+   "week": "",
+   "file": "주간메뉴표(11-1).xlsx",
+   "none": true
+  }
+ },
+ "failed": {}
+}
