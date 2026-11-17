@@ -305,13 +305,15 @@ def gemini_models(key):
         raise gemini_error(e)
     names = [m["name"].split("/", 1)[-1] for m in models
              if "generateContent" in m.get("supportedGenerationMethods", [])]
-    cands = [n for n in config.GEMINI_MODELS if n in names]
+    def rank(n):  # 최신 버전 먼저, 같은 버전이면 pro → flash, 정식 → preview
+        v = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
+        return (-float(v.group(1)) if v else 0, 0 if "pro" in n else 1, 1 if "preview" in n else 0, n)
+    auto = sorted([n for n in names if re.match(r"gemini-\d", n) and re.search(r"pro|flash", n)
+                   and not re.search(r"lite|image|tts|audio|live|embed|exp|computer|thinking", n)], key=rank)
+    cands = list(dict.fromkeys([n for n in config.GEMINI_MODELS if n in names] + auto))[:config.GEMINI_MAX_TRIES]
     if not cands:
-        flash = sorted([n for n in names if "flash" in n and not re.search(r"lite|image|tts|audio|live|exp|preview", n)],
-                       reverse=True)
-        if not flash:
-            raise Fatal(f"쓸 수 있는 Gemini 모델을 찾지 못했습니다: {names[:10]}")
-        cands = flash[:1]
+        raise Fatal(f"쓸 수 있는 Gemini 모델을 찾지 못했습니다: {names[:10]}")
+    print(f"  · 시도할 모델: {', '.join(cands)}")
     _gemini_candidates = cands
     return cands
 
@@ -359,9 +361,9 @@ def ask_ai(filename, data, hint="", sheets=None):
             break
         except urllib.error.HTTPError as e:
             err = gemini_error(e)
-            if isinstance(err, QuotaExceeded):  # 이 모델 무료 한도 끝 → 다음 모델 (유료로 넘어가지 않음)
+            if isinstance(err, QuotaExceeded) or e.code == 404:  # 무료 한도 없음·끝, 또는 사라진 모델 → 다음 모델
                 last_quota = str(err)[:150]
-                print(f"  · {model} 무료 한도 초과/불가 → 다음 모델")
+                print(f"  · {model} 사용 불가({e.code}) → 다음 모델")
                 continue
             raise err
     if res is None:
