@@ -327,7 +327,7 @@ def gemini_error(e):
     return RuntimeError(f"Gemini API 오류 {e.code}: {detail}")
 
 
-def ask_ai(filename, data, hint="", sheets=None):
+def ask_ai(filename, data, hint="", sheets=None, dishes=None):
     """식단표 한 개를 Gemini(무료 사용량)로 읽어 JSON 문자열을 돌려줍니다. 유료 API는 쓰지 않습니다."""
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
@@ -341,7 +341,12 @@ def ask_ai(filename, data, hint="", sheets=None):
         for i, img in enumerate(page_images(data)):
             parts.append({"text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
             parts.append(inline("image/png", img))
-    parts.append({"text": PROMPT + (f"\n이 식당 표의 특징:\n{hint}\n" if hint else "")})
+    ref = ""
+    if dishes:
+        ref = ("\n철자 참고: 이 식당에서 전에 나왔던 메뉴 이름입니다. 표의 글자가 이 중 하나와 거의 같아 보이면 이 철자로 쓰세요.\n"
+               "단, 이번 주 표에 실제로 있는 메뉴만 옮기고, 이 목록에서 메뉴를 가져와 채우지는 마세요.\n"
+               + ", ".join(dishes) + "\n")
+    parts.append({"text": PROMPT + (f"\n이 식당 표의 특징:\n{hint}\n" if hint else "") + ref})
     body = {"contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
                                  "maxOutputTokens": config.GEMINI_MAX_TOKENS}}
@@ -467,6 +472,7 @@ def normalize(raw, source):
 # 지금까지 확인된 메뉴 글자를 사전으로 써서, 비슷한 모음·받침 하나만 다른 경우만 고칩니다 (새 메뉴는 건드리지 않음).
 _VOWEL_SIM = {frozenset(p) for p in [(5, 7), (4, 6), (0, 20), (8, 13), (1, 3), (4, 20), (0, 4)]}  # ㅔㅖ ㅓㅕ ㅏㅣ ㅗㅜ ㅐㅒ ㅓㅣ ㅏㅓ
 _FINAL_SIM = {frozenset(p) for p in [(16, 17), (0, 21)]}  # ㅁㅂ, 없음ㅇ
+_INITIAL_SIM = {frozenset(p) for p in [(12, 14), (0, 15), (3, 16), (7, 17)]}  # ㅈㅊ ㄱㅋ ㄷㅌ ㅂㅍ
 
 
 def _jamo(ch):
@@ -483,7 +489,7 @@ def _look_alike(a, b):
         return False
     (i1, v1, f1), (i2, v2, f2) = _jamo(diff[0][0]), _jamo(diff[0][1])
     if i1 != i2:
-        return False
+        return v1 == v2 and f1 == f2 and frozenset((i1, i2)) in _INITIAL_SIM
     if v1 != v2 and f1 == f2:
         return frozenset((v1, v2)) in _VOWEL_SIM
     if f1 != f2 and v1 == v2:
@@ -530,6 +536,28 @@ def fix_spelling(week, vocab):
                 c["main"] = fix_text(c["main"])
                 c["items"] = [fix_text(x) for x in c["items"]]
     return fixes
+
+
+_TRIAL_EXCLUDE = set()   # 점검(--trial) 때 정답 주차를 참고 목록에서 빼서 공정하게 비교
+
+
+def known_dishes(cafe, limit=600):
+    """이 식당에서 확인된 메뉴 이름들 (Gemini에게 철자 참고용으로 줌). 최근 것 우선."""
+    out = []
+    for f in sorted((config.DATA_DIR / cafe["id"] / "weeks").glob("*.json"), reverse=True):
+        if f.stem in _TRIAL_EXCLUDE:
+            continue
+        w = _load(f, None)
+        if not w or str(w.get("reader", "")).startswith("gemini"):
+            continue
+        for d in w["days"]:
+            for m in d["meals"]:
+                for c in m["corners"]:
+                    for t in [c["main"], *c["items"]]:
+                        t = re.sub(r"\s*\(.*$", "", t).strip()  # 원산지 괄호 빼고 이름만
+                        if len(t) >= 2:
+                            out.append(t)
+    return list(dict.fromkeys(out))[:limit]
 
 
 def unify_corner_names(cafe, week):
@@ -604,13 +632,18 @@ def parse_file(cafe, filename, data, source):
     last_err = None
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
-            week = normalize(extract_json(ask_ai(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
+            week = normalize(extract_json(ask_ai(filename, data, cafe.get("hint", ""), cafe.get("sheets"),
+                                                   None if filename.lower().endswith(".xlsx") else known_dishes(cafe))), source)
             week["reader"] = _gemini_model or ""
             notes = []
             if filename.lower().endswith(".xlsx"):
                 notes += [f"안내 제외: {x}" for x in check_against_xlsx(week, data, cafe.get("sheets"))]
             target = (config.DATA_DIR / cafe["id"] / "weeks" / f"{week['week_start']}.json").resolve()
-            notes += [f"글자 교정: {x}" for x in fix_spelling(week, known_words(exclude=target))]
+            vocab = known_words(exclude=target)
+            if week["week_start"] in _TRIAL_EXCLUDE:  # 점검 때는 정답 주차 단어를 사전에서 빼고 공정하게
+                vocab -= set(re.findall(r"[가-힣]{2,}", json.dumps(_load(target, {}).get("days", []), ensure_ascii=False))) - \
+                         set(re.findall(r"[가-힣]{2,}", json.dumps([_load(f, {}).get("days", []) for f in target.parent.glob("*.json") if f != target], ensure_ascii=False)))
+            notes += [f"글자 교정: {x}" for x in fix_spelling(week, vocab)]
             unify_corner_names(cafe, week)
             if notes:
                 report("notice", f"[{cafe['name']}] {week['week_start']}주 " + ", ".join(notes))
@@ -737,6 +770,8 @@ def main():
             raise Fatal("--file 은 --cafe 와 함께 써 주세요.")
         data = open(args.file, "rb").read()
         name = os.path.basename(args.file)
+        if args.trial and re.fullmatch(r"\d{4}-\d{2}-\d{2}", os.path.splitext(name)[0]):
+            _TRIAL_EXCLUDE.add(os.path.splitext(name)[0])
         week = parse_file(cafes[0], name, data, {"filename": name})
         if args.trial:
             _save(config.ROOT / "state" / "trial" / f"{cafes[0]['id']}-{week['week_start']}.json", week)
