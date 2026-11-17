@@ -1,7 +1,7 @@
 """농밥 봇 — 식당별 식단표 메일을 찾아 첨부(PDF·엑셀)를 읽고, 앱이 보여줄 JSON을 만듭니다.
 
 흐름:  config.CAFETERIAS 의 식당마다 Gmail(IMAP) 검색 → 새 메일의 첨부
-      → Claude가 표를 JSON으로 변환 → 형식 검증·정리
+      → Gemini(무료 사용량)가 표를 JSON으로 변환 → 형식 검증·정리
       → docs/data/<식당>/weeks/<월요일>.json 저장 → 목록·오프라인 사본 갱신
 
 사용법:
@@ -280,38 +280,80 @@ def xlsx_text(data, sheets=None):
     return "\n\n".join(out)
 
 
-def ask_claude(filename, data, hint="", sheets=None):
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise Fatal("ANTHROPIC_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
-    if filename.lower().endswith(".xlsx"):
-        content = [{"type": "text", "text": XLSX_NOTE + "\n\n" + xlsx_text(data, sheets)}]
+_gemini_model = None
+
+
+def gemini_model(key):
+    """쓸 수 있는 Gemini 모델을 고릅니다: config 순서대로 찾고, 없으면 가장 가까운 flash 모델.
+    (모델 이름이 바뀌어도 봇이 멈추지 않게 매번 목록에서 확인)"""
+    global _gemini_model
+    if _gemini_model:
+        return _gemini_model
+    req = urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                                 headers={"x-goog-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            models = json.load(r).get("models", [])
+    except urllib.error.HTTPError as e:
+        raise gemini_error(e)
+    names = [m["name"].split("/", 1)[-1] for m in models
+             if "generateContent" in m.get("supportedGenerationMethods", [])]
+    for want in config.GEMINI_MODELS:
+        if want in names:
+            _gemini_model = want
+            break
     else:
-        content = [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
-                                                   "data": base64.b64encode(data).decode()}}]
+        flash = sorted([n for n in names if "flash" in n and not re.search(r"lite|image|tts|audio|live|exp|preview", n)],
+                       reverse=True)
+        if not flash:
+            raise Fatal(f"쓸 수 있는 Gemini 모델을 찾지 못했습니다: {names[:10]}")
+        _gemini_model = flash[0]
+    print(f"  · Gemini 모델: {_gemini_model}")
+    return _gemini_model
+
+
+def gemini_error(e):
+    detail = e.read().decode(errors="ignore")[:300]
+    if e.code == 429:
+        return Fatal(f"Gemini 무료 사용 한도를 넘었습니다. 유료로 넘어가지 않고 멈춥니다 (다음 실행 때 다시 시도): {detail}")
+    if e.code in (400, 401, 403) and re.search(r"API key|API_KEY|permission|PERMISSION", detail):
+        return Fatal(f"Gemini API 키가 거절됐습니다 ({e.code}). 저장소 Secrets의 GEMINI_API_KEY를 확인하세요: {detail}")
+    return RuntimeError(f"Gemini API 오류 {e.code}: {detail}")
+
+
+def ask_ai(filename, data, hint="", sheets=None):
+    """식단표 한 개를 Gemini(무료 사용량)로 읽어 JSON 문자열을 돌려줍니다. 유료 API는 쓰지 않습니다."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise Fatal("GEMINI_API_KEY 환경변수가 없습니다. 저장소 Settings → Secrets에 넣어 주세요.")
+    def inline(mime, raw):
+        return {"inline_data": {"mime_type": mime, "data": base64.b64encode(raw).decode()}}
+    if filename.lower().endswith(".xlsx"):
+        parts = [{"text": XLSX_NOTE + "\n\n" + xlsx_text(data, sheets)}]
+    else:
+        parts = [inline("application/pdf", data)]
         for i, img in enumerate(page_images(data)):
-            content.append({"type": "text", "text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
-            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                        "data": base64.b64encode(img).decode()}})
-    content.append({"type": "text", "text": PROMPT + (f"\n이 식당 표의 특징:\n{hint}\n" if hint else "")})
-    body = {"model": config.CLAUDE_MODEL, "max_tokens": config.CLAUDE_MAX_TOKENS,
-            "messages": [{"role": "user", "content": content}]}
+            parts.append({"text": f"확대 이미지 {i + 1} ({'위쪽' if i == 0 else '아래쪽'} 절반)"})
+            parts.append(inline("image/png", img))
+    parts.append({"text": PROMPT + (f"\n이 식당 표의 특징:\n{hint}\n" if hint else "")})
+    body = {"contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
+                                 "maxOutputTokens": config.GEMINI_MAX_TOKENS}}
+    model = gemini_model(key)
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         data=json.dumps(body).encode(),
-        headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        headers={"x-goog-api-key": key, "content-type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=300) as r:
             res = json.load(r)
     except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="ignore")[:300]
-        if e.code in (401, 403):
-            raise Fatal(f"Claude API 키가 거절됐습니다 ({e.code}). 키를 다시 확인하세요: {detail}")
-        if e.code == 400 and "credit" in detail.lower():
-            raise Fatal(f"Claude API 잔액이 부족합니다. console.anthropic.com에서 충전하세요: {detail}")
-        raise RuntimeError(f"Claude API 오류 {e.code}: {detail}")
-    return "".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text")
+        raise gemini_error(e)
+    cands = res.get("candidates") or []
+    if not cands:
+        raise ValueError(f"Gemini 응답이 비어 있습니다: {json.dumps(res.get('promptFeedback', {}), ensure_ascii=False)[:200]}")
+    return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []) if not p.get("thought"))
 
 
 def extract_json(text):
@@ -405,7 +447,7 @@ def parse_file(cafe, filename, data, source):
     last_err = None
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
-            return normalize(extract_json(ask_claude(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
+            return normalize(extract_json(ask_ai(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
         except NotInFile:
             raise
         except (ValueError, KeyError, json.JSONDecodeError) as e:
@@ -515,7 +557,8 @@ def main():
     ap.add_argument("--cafe", help="한 식당만 처리 (config.CAFETERIAS 의 id)")
     ap.add_argument("--file", help="메일 대신 로컬 식단표 파일(PDF·xlsx)로 테스트 (--cafe 필요)")
     ap.add_argument("--reprocess", action="store_true", help="처리한 메일도 다시 훑기 (이미 읽은 파일은 무료로 건너뜀)")
-    ap.add_argument("--force", action="store_true", help="이미 읽은 파일도 API로 다시 읽기 (비용 발생)")
+    ap.add_argument("--force", action="store_true", help="이미 읽은 파일도 다시 읽기 (무료 사용량 사용)")
+    ap.add_argument("--trial", action="store_true", help="--file 과 함께: 앱 데이터는 그대로 두고 결과만 state/trial/ 에 저장")
     ap.add_argument("--dump", nargs="?", const=str(config.ORIGINALS_DIR / "mail"), metavar="DIR",
                     help="해석하지 않고 검색된 메일의 원본 첨부만 저장 (기본: originals/mail/<식당>/)")
     args = ap.parse_args()
@@ -527,7 +570,12 @@ def main():
             raise Fatal("--file 은 --cafe 와 함께 써 주세요.")
         data = open(args.file, "rb").read()
         name = os.path.basename(args.file)
-        save_week(cafes[0], parse_file(cafes[0], name, data, {"filename": name}), name, data)
+        week = parse_file(cafes[0], name, data, {"filename": name})
+        if args.trial:
+            _save(config.ROOT / "state" / "trial" / f"{cafes[0]['id']}-{week['week_start']}.json", week)
+            report("notice", f"[{cafes[0]['name']}] {week['week_start']}주 시험 읽기 완료 (모델 {_gemini_model})")
+            return
+        save_week(cafes[0], week, name, data)
         rebuild_index()
         return
 
@@ -625,7 +673,8 @@ if __name__ == "__main__":
         main()
     except Fatal as e:
         report("error", str(e))
-        write_status("error", "Claude API 잔액이 부족해요" if "잔액" in str(e) else "확인 실패 — 설정을 확인해 주세요")
+        write_status("error", "무료 사용 한도 초과 — 다음 실행 때 다시 읽어요" if "한도" in str(e)
+                     else "확인 실패 — 설정을 확인해 주세요")
         sys.exit(1)
     except Exception as e:  # 예상 못 한 오류도 원인이 화면에 남게
         report("error", f"예상 못 한 오류: {type(e).__name__}: {e}")

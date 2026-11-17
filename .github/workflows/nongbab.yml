@@ -43,7 +43,7 @@ jobs:
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python nongbab_bot.py ${{ inputs.cafe && format('--cafe {0}', inputs.cafe) || '' }}
 
       - name: 바뀐 게 있으면 저장

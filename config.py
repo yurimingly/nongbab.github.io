@@ -3,7 +3,7 @@
 비밀번호·API 키는 여기 적지 말고 환경변수(GitHub Secrets)로 넣으세요.
   GMAIL_USER          식단표 메일을 받는 Gmail 주소
   GMAIL_APP_PASSWORD  Google 계정 > 보안 > 앱 비밀번호 (16자리, 일반 비밀번호 X)
-  ANTHROPIC_API_KEY   식단표(PDF·엑셀)를 읽어 JSON으로 바꿀 때 사용
+  GEMINI_API_KEY      식단표(PDF·엑셀)를 읽어 JSON으로 바꿀 때 사용 (aistudio.google.com 무료 키)
 """
 from pathlib import Path
 
@@ -70,8 +70,10 @@ IMAP_HOST = "imap.gmail.com"
 MAX_MAILS_PER_RUN = 10          # 식당마다 한 번 실행에 확인할 최근 메일 수
 
 # ── 식단표 해석 ────────────────────────────────────────────
-CLAUDE_MODEL = "claude-opus-5-5"   # 주 1회라 비용보다 정확도 우선
-CLAUDE_MAX_TOKENS = 16000
+# 무료 사용량만 씁니다. 키를 만든 Google 프로젝트에 결제를 연결하지 마세요 (연결하면 유료로 넘어갈 수 있음).
+# 한도를 넘으면(429) 유료로 넘어가지 않고 멈춘 뒤 다음 실행 때 다시 시도합니다.
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]  # 앞에서부터 있는 것 사용
+GEMINI_MAX_TOKENS = 32000
 PARSE_RETRIES = 1               # 응답 형식이 틀렸을 때만 1번 더 (호출마다 돈이 드므로 최소로)
 MAX_FAILS_PER_FILE = 2          # 같은 파일이 이만큼 실패하면 다음부터는 다시 시도하지 않음 (매주 돈만 나가는 것 방지)
 RENDER_DPI = 200                # PDF 작은 글씨 확인용으로 함께 보내는 확대 이미지 해상도

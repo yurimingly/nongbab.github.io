@@ -1,0 +1,38 @@
+name: 농밥 읽기 점검 (앱 데이터는 안 바뀜)
+
+# 보관 중인 최신 원본을 Gemini로 다시 읽어 state/trial/ 에만 저장합니다.
+# 읽는 방식을 바꿨을 때 결과가 원래와 같은지 비교하는 용도 (무료 사용량 사용).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 도구 설치
+        run: |
+          which pdftoppm || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
+          pip install -q pillow openpyxl
+      - name: 식당마다 최신 원본 시험 읽기
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          for cafe in sonbo center singwan; do
+            f=$(ls originals/$cafe/* 2>/dev/null | sort | tail -1)
+            [ -n "$f" ] && python nongbab_bot.py --file "$f" --cafe $cafe --trial || echo "::warning::$cafe 시험 실패"
+          done
+      - name: 저장
+        run: |
+          git config user.name "nongbab-bot"
+          git config user.email "nongbab-bot@users.noreply.github.com"
+          git add state/trial
+          git diff --cached --quiet || git commit -m "읽기 점검 결과"
+          ok=0; for i in 1 2 3; do git pull -q --rebase origin "$GITHUB_REF_NAME" && git push -q && { ok=1; break; }; sleep 5; done; [ "$ok" = 1 ]

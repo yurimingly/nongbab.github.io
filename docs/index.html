@@ -135,7 +135,7 @@ main .wrap{padding-block:14px 32px;display:grid;gap:14px}
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
       <span id="refresh-label">지금 새 식단 확인</span>
     </button>
-    <p class="refresh-note">자동으로 매주 금요일 오후 8시에 돌아갑니다.</p>
+    <p class="refresh-note">자동으로 매주 금요일 오후 8시에 새 식단을 가져옵니다.</p>
     <p class="refresh-status" id="refresh-status" aria-live="polite"></p>
   </section>
 </main>
@@ -312,6 +312,8 @@ function setBusy(on, label){
   $("#refresh-label").textContent = label || "지금 새 식단 확인";
 }
 
+// 실행 권한이 있는 앱(내 폰용)에서만 버튼을 보여줌. 공유용 앱·브라우저는 자동 업데이트 안내만
+$("#refresh").hidden = !bridge;
 $("#refresh").onclick = async () => {
   if (!bridge) {
     $("#refresh-status").innerHTML = ACTIONS_URL
