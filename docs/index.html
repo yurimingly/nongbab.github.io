@@ -237,6 +237,7 @@ function render(){
   const shared = (w.shared || []).filter(s => mealFilter === "전체" || s.meal === mealFilter);
 
   $("#app").innerHTML = `
+    ${!pinnedStart && !index.weeks.some(x => x.start <= kst() && kst() <= x.end) ? `<div class="note">이번 주 식단표는 아직 없어요. 가장 최근 식단(${md(w.week_start)} – ${md(w.week_end)})을 보여드려요.</div>` : ""}
     ${w.sample ? '<div class="note">예시 화면이에요. 메일 미리보기에서 옮긴 지난 식단이라 점심은 일부만 있어요. 봇이 실행되면 실제 식단표로 바뀝니다.</div>' : ""}
     <div class="days" style="--cols:${w.days.length}">${days}</div>
     ${shared.map(s => `<div class="shared"><h3>${esc(s.name)} <small>${esc(s.time)} · 매일</small></h3>${s.lines.map(l => `<div>${esc(l)}</div>`).join("")}</div>`).join("")}
@@ -251,15 +252,25 @@ async function loadWeek(i){
 }
 
 // 보던 주(없으면 오늘이 든 주, 그것도 없으면 최신 주)를 고름
+// 고를 주: ① 화살표로 직접 고른 주(있으면) ② 오늘이 든 주 ③ 오늘 이전 가장 최근 주 ④ 최신 주
+let pinnedStart = null;   // 사용자가 화살표로 직접 고른 주. 식당을 바꿔도 이 주는 유지
 function pickWeek(preferStart){
   const today = kst();
   let i = preferStart ? index.weeks.findIndex(w => w.start === preferStart) : -1;
   if (i < 0) i = index.weeks.findIndex(w => w.start <= today && today <= w.end);
+  if (i < 0) i = index.weeks.findIndex(w => w.start <= today);
   return Math.max(0, i);
 }
 
-async function openCafe(id, keepWeek){
-  const prevStart = keepWeek && index?.weeks?.[cur]?.start;
+// 오늘 카드가 있으면 거기로, 없으면(이번 주 식단 없음·다른 주) 맨 위 안내가 보이게
+function showToday(){
+  const el = document.getElementById("d-" + kst());
+  if (el) el.scrollIntoView({block:"start", behavior:"instant"}); else window.scrollTo({top:0, behavior:"instant"});
+}
+
+async function openCafe(id, keepCurrent){
+  // 새로고침(keepCurrent)이면 보던 주, 식당을 바꿀 때는 직접 고른 주가 없으면 이번 주
+  const prevStart = keepCurrent ? (index?.weeks?.[cur]?.start || pinnedStart) : pinnedStart;
   cafeId = cafes.some(c => c.id === id) ? id : cafes[0].id;
   store.set("nongbab.cafe", cafeId);
   index = await getJSON(`${base}${cafeId}/index.json`);
@@ -274,7 +285,7 @@ async function boot(refresh){
     if (!listing?.cafeterias?.length) throw new Error("no data");
     cafes = listing.cafeterias;
     await openCafe(cafeId, refresh);
-    if (!refresh) document.getElementById("d-" + kst())?.scrollIntoView({block:"start"});
+    if (!refresh) showToday();
   }catch(e){
     if (refresh) return; // 새로고침 실패 시 보던 화면 유지
     // 저장해 둔 옛 화면 파일이 원인일 수 있으니, 저장본을 한 번 비우고 새로 받아 다시 열어 봄
@@ -340,11 +351,17 @@ $("#refresh").onclick = async () => {
   $("#refresh-status").textContent = "아직 결과가 안 왔어요. 잠시 후 앱을 다시 열어 보세요.";
 };
 
-$("#prev").onclick = () => loadWeek(cur + 1);
-$("#next").onclick = () => loadWeek(cur - 1);
+// 화살표로 고른 주는 기억 (오늘이 든 주로 돌아오면 기억 해제 → 다시 '이번 주' 따라감)
+async function stepWeek(d){
+  await loadWeek(cur + d);
+  const w = index.weeks[cur], today = kst();
+  pinnedStart = (w.start <= today && today <= w.end) ? null : w.start;
+}
+$("#prev").onclick = () => stepWeek(1);
+$("#next").onclick = () => stepWeek(-1);
 $("#cafes").onclick = async e => {
   const b = e.target.closest(".cafe"); if (!b || b.dataset.cafe === cafeId) return;
-  try { await openCafe(b.dataset.cafe, true); document.getElementById("d-" + kst())?.scrollIntoView({block:"start"}); }
+  try { await openCafe(b.dataset.cafe, false); showToday(); }
   catch { $("#app").innerHTML = `<div class="empty"><b>식단표를 불러오지 못했어요</b>인터넷 연결을 확인해 주세요</div>`; }
 };
 $("#chips").onclick = e => { const b = e.target.closest(".chip"); if (!b) return; mealFilter = b.dataset.meal; store.set("nongbab.meal", mealFilter); render(); };
