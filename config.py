@@ -72,7 +72,8 @@ MAX_MAILS_PER_RUN = 10          # 식당마다 한 번 실행에 확인할 최�
 # ── 식단표 해석 ────────────────────────────────────────────
 # 무료 사용량만 씁니다. 키를 만든 Google 프로젝트에 결제를 연결하지 마세요 (연결하면 유료로 넘어갈 수 있음).
 # 한도를 넘으면(429) 유료로 넘어가지 않고 멈춘 뒤 다음 실행 때 다시 시도합니다.
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]  # 앞에서부터 있는 것 사용
+# 앞에서부터 시도: 정확한 pro(무료 한도 작음, 주 3번이면 충분) → 한도 초과·없음이면 flash로
+GEMINI_MODELS = ["gemini-2.5-pro", "gemini-pro-latest", "gemini-2.5-flash", "gemini-flash-latest"]
 GEMINI_MAX_TOKENS = 32000
 PARSE_RETRIES = 1               # 응답 형식이 틀렸을 때만 1번 더 (호출마다 돈이 드므로 최소로)
 MAX_FAILS_PER_FILE = 2          # 같은 파일이 이만큼 실패하면 다음부터는 다시 시도하지 않음 (매주 돈만 나가는 것 방지)

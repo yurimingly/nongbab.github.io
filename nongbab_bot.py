@@ -93,7 +93,9 @@ PROMPT = """첨부한 자료는 회사 구내식당의 주간 식단표입니다
 - 표에 있는 날짜는 모두 days에 넣으세요. 빈 칸이나 회색으로 막힌 날은 holiday=true, meals=[], 사유가 있으면 holiday_name.
 - 메뉴 이름은 한 글자씩 확인해서 정확히 옮기세요 (예: '칩'과 '침', '진'과 '전'을 구분). 읽을 수 없는 글자는 [?].
 - 엑셀 텍스트로 받은 경우: 셀 주소(예: C7)와 값이 주어지고, 병합된 셀은 범위로 표시됩니다. 같은 열이 같은 날짜입니다.
-  [굵게]·[배경:색] 표시는 원본 서식이며, 보통 대표 메뉴나 구분 제목을 뜻합니다. 메뉴판 맨 위 안내 문구(캠페인 등)는 메뉴가 아닙니다.
+  [굵게]·[배경:색] 표시는 원본 서식이며, 보통 대표 메뉴나 구분 제목을 뜻합니다.
+  메뉴판 맨 위 캠페인 문구(예: '…아침밥 먹기 운동에 동참해 주세요')는 메뉴도 안내(note)도 아니니 어디에도 넣지 마세요.
+  짧은 안내 문구(예: '균형미 먹는날')는 그 문구가 적힌 열(같은 날짜)의 코너에만 붙이세요. 다른 날에 복사하지 마세요.
 """
 
 XLSX_NOTE = "아래는 엑셀 식단표의 셀 내용입니다 (형식: 셀주소 [서식] 값). 병합 셀은 '병합 범위' 목록을 참고하세요."
@@ -280,15 +282,20 @@ def xlsx_text(data, sheets=None):
     return "\n\n".join(out)
 
 
-_gemini_model = None
+_gemini_model = None      # 마지막으로 성공한 모델 (기록용)
+_gemini_candidates = None
 
 
-def gemini_model(key):
-    """쓸 수 있는 Gemini 모델을 고릅니다: config 순서대로 찾고, 없으면 가장 가까운 flash 모델.
-    (모델 이름이 바뀌어도 봇이 멈추지 않게 매번 목록에서 확인)"""
-    global _gemini_model
-    if _gemini_model:
-        return _gemini_model
+class QuotaExceeded(Exception):
+    pass
+
+
+def gemini_models(key):
+    """쓸 수 있는 Gemini 모델 후보를 config 순서대로 돌려줍니다 (계정에 없는 모델은 빼고).
+    목록에 하나도 없으면 가장 새 flash 모델. 모델 이름이 바뀌어도 봇이 멈추지 않게 매번 확인합니다."""
+    global _gemini_candidates
+    if _gemini_candidates:
+        return _gemini_candidates
     req = urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
                                  headers={"x-goog-api-key": key})
     try:
@@ -298,24 +305,21 @@ def gemini_model(key):
         raise gemini_error(e)
     names = [m["name"].split("/", 1)[-1] for m in models
              if "generateContent" in m.get("supportedGenerationMethods", [])]
-    for want in config.GEMINI_MODELS:
-        if want in names:
-            _gemini_model = want
-            break
-    else:
+    cands = [n for n in config.GEMINI_MODELS if n in names]
+    if not cands:
         flash = sorted([n for n in names if "flash" in n and not re.search(r"lite|image|tts|audio|live|exp|preview", n)],
                        reverse=True)
         if not flash:
             raise Fatal(f"쓸 수 있는 Gemini 모델을 찾지 못했습니다: {names[:10]}")
-        _gemini_model = flash[0]
-    print(f"  · Gemini 모델: {_gemini_model}")
-    return _gemini_model
+        cands = flash[:1]
+    _gemini_candidates = cands
+    return cands
 
 
 def gemini_error(e):
     detail = e.read().decode(errors="ignore")[:300]
     if e.code == 429:
-        return Fatal(f"Gemini 무료 사용 한도를 넘었습니다. 유료로 넘어가지 않고 멈춥니다 (다음 실행 때 다시 시도): {detail}")
+        return QuotaExceeded(detail)
     if e.code in (400, 401, 403) and re.search(r"API key|API_KEY|permission|PERMISSION", detail):
         return Fatal(f"Gemini API 키가 거절됐습니다 ({e.code}). 저장소 Secrets의 GEMINI_API_KEY를 확인하세요: {detail}")
     return RuntimeError(f"Gemini API 오류 {e.code}: {detail}")
@@ -339,17 +343,29 @@ def ask_ai(filename, data, hint="", sheets=None):
     body = {"contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
                                  "maxOutputTokens": config.GEMINI_MAX_TOKENS}}
-    model = gemini_model(key)
-    req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        data=json.dumps(body).encode(),
-        headers={"x-goog-api-key": key, "content-type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            res = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise gemini_error(e)
+    global _gemini_model
+    res, last_quota = None, ""
+    for model in gemini_models(key):
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body).encode(),
+            headers={"x-goog-api-key": key, "content-type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                res = json.load(r)
+            _gemini_model = model
+            print(f"  · Gemini 모델: {model}")
+            break
+        except urllib.error.HTTPError as e:
+            err = gemini_error(e)
+            if isinstance(err, QuotaExceeded):  # 이 모델 무료 한도 끝 → 다음 모델 (유료로 넘어가지 않음)
+                last_quota = str(err)[:150]
+                print(f"  · {model} 무료 한도 초과/불가 → 다음 모델")
+                continue
+            raise err
+    if res is None:
+        raise Fatal(f"Gemini 무료 사용 한도를 모든 모델에서 넘었습니다. 유료로 넘어가지 않고 멈춥니다 (다음 실행 때 다시 시도): {last_quota}")
     cands = res.get("candidates") or []
     if not cands:
         raise ValueError(f"Gemini 응답이 비어 있습니다: {json.dumps(res.get('promptFeedback', {}), ensure_ascii=False)[:200]}")
