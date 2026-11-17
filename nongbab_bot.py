@@ -399,6 +399,7 @@ def _lines(v):
     out = []
     for x in v or []:
         t = re.sub(r"\s+", " ", str(x)).strip()
+        t = re.sub(r"\s*,\s*", ",", t)  # 원산지 괄호 쉼표 띄어쓰기 통일: (돈육, 계육) → (돈육,계육)
         t = re.sub(r"^[*•·\-–]+\s*", "", t)  # 표의 글머리 기호(*, •, -)는 앱이 따로 그리므로 제거
         if t:
             out.append(t)
@@ -461,11 +462,159 @@ def normalize(raw, source):
             "updated": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds")}
 
 
+# ─────────────────────────── 읽은 결과 검증·교정 ───────────────────────────
+# 무료 모델은 '계육→게육', '창편→창펀'처럼 생김새가 비슷한 글자를 가끔 틀립니다.
+# 지금까지 확인된 메뉴 글자를 사전으로 써서, 비슷한 모음·받침 하나만 다른 경우만 고칩니다 (새 메뉴는 건드리지 않음).
+_VOWEL_SIM = {frozenset(p) for p in [(5, 7), (4, 6), (0, 20), (8, 13), (1, 3), (4, 20), (0, 4)]}  # ㅔㅖ ㅓㅕ ㅏㅣ ㅗㅜ ㅐㅒ ㅓㅣ ㅏㅓ
+_FINAL_SIM = {frozenset(p) for p in [(16, 17), (0, 21)]}  # ㅁㅂ, 없음ㅇ
+
+
+def _jamo(ch):
+    c = ord(ch) - 0xAC00
+    return c // 588, (c % 588) // 28, c % 28
+
+
+def _look_alike(a, b):
+    """같은 길이 단어에서 한 글자의 모음 또는 받침 하나만, 생김새가 비슷하게 다르면 True."""
+    if len(a) != len(b) or a == b:
+        return False
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    if len(diff) != 1:
+        return False
+    (i1, v1, f1), (i2, v2, f2) = _jamo(diff[0][0]), _jamo(diff[0][1])
+    if i1 != i2:
+        return False
+    if v1 != v2 and f1 == f2:
+        return frozenset((v1, v2)) in _VOWEL_SIM
+    if f1 != f2 and v1 == v2:
+        return frozenset((f1, f2)) in _FINAL_SIM
+    return False
+
+
+def known_words(exclude=None):
+    """확인된 메뉴 단어: Claude로 읽었던(검증한) 주의 단어 + 서로 다른 2주 이상 나온 단어."""
+    from collections import Counter
+    trusted, seen = set(), Counter()
+    for f in config.DATA_DIR.glob("*/weeks/*.json"):
+        if exclude and f.resolve() == exclude:
+            continue
+        w = _load(f, None)
+        if not w:
+            continue
+        words = set(re.findall(r"[가-힣]{2,}", json.dumps(w["days"], ensure_ascii=False)))
+        words |= set(re.findall(r"[가-힣]{2,}", " ".join(c.get("name", "") for d in w["days"]
+                                                      for m in d["meals"] for c in m["corners"])))
+        if not str(w.get("reader", "")).startswith("gemini"):
+            trusted |= words
+        seen.update(words)
+    return trusted | {k for k, n in seen.items() if n >= 2}
+
+
+def fix_spelling(week, vocab):
+    fixes = []
+    def fix_text(t):
+        def sub(m):
+            word = m.group(0)
+            if word in vocab:
+                return word
+            cands = [v for v in vocab if _look_alike(word, v)]
+            if len(cands) == 1:  # 후보가 딱 하나일 때만
+                fixes.append(f"{word}→{cands[0]}")
+                return cands[0]
+            return word
+        return re.sub(r"[가-힣]{2,}", sub, t)
+    for d in week["days"]:
+        for m in d["meals"]:
+            for c in m["corners"]:
+                c["name"] = fix_text(c["name"])
+                c["main"] = fix_text(c["main"])
+                c["items"] = [fix_text(x) for x in c["items"]]
+    return fixes
+
+
+def unify_corner_names(cafe, week):
+    """'TO샐러드 (예약)'처럼 띄어쓰기만 다른 코너 이름은 이 식당에서 쓰던 이름으로 맞춥니다."""
+    names = {}
+    for f in sorted((config.DATA_DIR / cafe["id"] / "weeks").glob("*.json")):
+        for d in (_load(f, {}) or {}).get("days", []):
+            for m in d["meals"]:
+                for c in m["corners"]:
+                    names.setdefault(re.sub(r"\s+", "", c["name"]), c["name"])
+    for d in week["days"]:
+        for m in d["meals"]:
+            for c in m["corners"]:
+                c["name"] = names.get(re.sub(r"\s+", "", c["name"]), c["name"])
+
+
+def xlsx_columns(data, sheets):
+    """엑셀에서 날짜별(열별) 칸 글자와, 모든 날짜에 걸친 큰 안내 칸(캠페인 등)의 글자를 모읍니다."""
+    import io
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    cols, banners = {}, set()
+    for ws in wb.worksheets:
+        if ws.sheet_state != "visible" or not sheet_matches(ws, sheets):
+            continue
+        date_col = {}
+        for row in ws.iter_rows(max_row=8):
+            for c in row:
+                if isinstance(c.value, (dt.datetime, dt.date)):
+                    date_col[c.column] = c.value.strftime("%Y-%m-%d")
+        if not date_col:
+            continue
+        merged = {}
+        for r in ws.merged_cells.ranges:
+            spans = [d for col, d in date_col.items() if r.min_col <= col <= r.max_col]
+            v = ws.cell(r.min_row, r.min_col).value
+            if v is None:
+                continue
+            if len(spans) >= max(3, len(date_col) - 1):
+                banners.add(re.sub(r"\s+", "", str(v)))
+            for d in spans:
+                merged.setdefault(d, []).append(str(v))
+        for col, d in date_col.items():
+            texts = [str(c.value) for c in ws[openpyxl.utils.get_column_letter(col)] if c.value is not None]
+            cols[d] = re.sub(r"\s+", "", " ".join(texts + merged.get(d, [])))
+    return cols, banners
+
+
+def check_against_xlsx(week, data, sheets):
+    """엑셀은 글자가 정확하므로, 안내 문구가 실제로 그날 칸에 있는지 확인해 없는 건 뺍니다."""
+    cols, banners = xlsx_columns(data, sheets)
+    removed = []
+    for d in week["days"]:
+        col = cols.get(d["date"])
+        if col is None:
+            continue
+        for m in d["meals"]:
+            note = re.sub(r"\s+", "", m.get("note", ""))
+            if note and (note in banners or not any(k in col for k in re.findall(r"[가-힣]{2,}", note)[:2])):
+                removed.append(f"{d['date'][5:]} {m['note']}")
+                m["note"] = ""
+            for c in m["corners"]:
+                cn = re.sub(r"\s+", "", c.get("note", ""))
+                if cn and cn not in col:
+                    removed.append(f"{d['date'][5:]} {c['name']} {c['note']}")
+                    c["note"] = ""
+        d["meals"] = [m for m in d["meals"] if m["corners"] or m.get("note")]
+    return removed
+
+
 def parse_file(cafe, filename, data, source):
     last_err = None
     for attempt in range(1 + config.PARSE_RETRIES):
         try:
-            return normalize(extract_json(ask_ai(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
+            week = normalize(extract_json(ask_ai(filename, data, cafe.get("hint", ""), cafe.get("sheets"))), source)
+            week["reader"] = _gemini_model or ""
+            notes = []
+            if filename.lower().endswith(".xlsx"):
+                notes += [f"안내 제외: {x}" for x in check_against_xlsx(week, data, cafe.get("sheets"))]
+            target = (config.DATA_DIR / cafe["id"] / "weeks" / f"{week['week_start']}.json").resolve()
+            notes += [f"글자 교정: {x}" for x in fix_spelling(week, known_words(exclude=target))]
+            unify_corner_names(cafe, week)
+            if notes:
+                report("notice", f"[{cafe['name']}] {week['week_start']}주 " + ", ".join(notes))
+            return week
         except NotInFile:
             raise
         except (ValueError, KeyError, json.JSONDecodeError) as e:
