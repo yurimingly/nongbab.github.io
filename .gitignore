@@ -6,3 +6,5 @@ android/build/
 android/.gradle/
 android/local.properties
 !android/debug.keystore
+probe/build/
+probe/.gradle/

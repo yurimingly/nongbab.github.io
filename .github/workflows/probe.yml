@@ -1,0 +1,36 @@
+name: 농밥 화면기록 APK
+
+# NH With '오늘뭐먹지' 화면 구조를 기록하는 점검용 앱을 빌드해 Releases의 probe-apk에 올립니다.
+on:
+  push:
+    branches: [main]
+    paths: ["probe/**", ".github/workflows/probe.yml"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: 빌드
+        run: |
+          gradle -p probe assembleDebug --no-daemon
+          cp probe/build/outputs/apk/debug/*.apk nongbab-probe.apk
+      - name: Releases에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete probe-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create probe-apk nongbab-probe.apk --title "농밥 화면기록 #${GITHUB_RUN_NUMBER}" \
+            --notes "NH With 화면 구조 기록용 점검 앱" --prerelease
